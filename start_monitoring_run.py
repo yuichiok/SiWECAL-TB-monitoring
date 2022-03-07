@@ -25,6 +25,7 @@ file_paths = dict(
     default_config="monitoring.cfg",
     log_file="log_monitoring.log",
     masked_channels="masked_channels.txt",
+    current_build="current_build.root",
     tb_analysis_dir=tb_analysis_dir,
 )
 monitoring_subfolders = dict(
@@ -113,7 +114,7 @@ def configure_logging(logger, log_file=None):
         logger.addHandler(file_handler)
 
     time_now = datetime.datetime.now().strftime("%Y-%m-%d-%H:%M:%S")
-    logger.info(f"📃Logging to file {log_file} started at {time_now}.")
+    logger.info(f"🛫Logging to file {log_file} started at {time_now}.")
 
 
 def log_unexpected_error_subprocess(logger, subprocess_return, add_context=""):
@@ -480,8 +481,52 @@ class EcalMonitoring:
                 self.logger, ret, " during run_eventbuilding"
             )
             exit()
+        self.merge_eventbuilding(tmp_path)
         os.rename(tmp_path, out_path)
         return out_path
+
+    def merge_eventbuilding(self, part_path):
+        curr = os.path.join(self.output_dir, my_paths.current_build)
+        temp = os.path.join(self.output_dir, my_paths.tmp_dir, my_paths.current_build)
+        if os.path.exists(temp):
+            # Only one partial buildfile should try to be merged at any time.
+            time.sleep(1)
+            return self.merge_eventbuilding(part_path)
+        else:
+            # Quickly create the temp file.
+            # The shutil.copy call below needs a few atomic operations before it
+            # creates the file.
+            # During that time, we can create a race condition where to processes
+            # try to run the merging.
+            # This would not be catastrophic (one build_dat.root file will loose
+            # the race and simply error out).
+            # But it does mean we have to restart the monitoring afterwards,
+            # to reprocess this single file.
+            # That might be confusing for a user, so let's better avoid it.
+            open(temp, "a").close()
+        try:
+            shutil.copy(curr, temp)
+        except FileNotFoundError:
+            os.rename(part_path, curr)
+            shutil.copy(curr, part_path)
+            return
+
+        root_macro_dir = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), "continuous_event_building"
+        )
+        root_call = f'"mergeSelective.C(\\"{temp}\\", \\"{part_path}\\", \\"ecal\\")"'
+        ret = subprocess.run(
+            "root -b -l -q " + root_call,
+            shell=True,
+            capture_output=True,
+            cwd=root_macro_dir,
+        )
+        if ret.returncode != 0 or ret.stderr != b"":
+            log_unexpected_error_subprocess(
+                self.logger, ret, " during merge_eventbuilding"
+            )
+            exit()
+        os.rename(temp, curr)
 
 
 if __name__ == "__main__":
