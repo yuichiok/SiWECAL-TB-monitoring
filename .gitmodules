@@ -1,0 +1,3 @@
+[submodule "continuous_event_building/SiWECAL-TB-analysis"]
+	path = continuous_event_building/SiWECAL-TB-analysis
+	url = git@github.com:kunathj/SiWECAL-TB-analysis.git
