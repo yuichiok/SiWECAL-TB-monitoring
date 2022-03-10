@@ -74,3 +74,14 @@ repos:
   hooks:
     - id: isort
       args: ["--profile", "black"]
+
+## C++ formatting
+- repo: https://github.com/pre-commit/mirrors-clang-format
+  rev: v13.0.1
+  hooks:
+  - id: clang-format
+
+- repo: https://github.com/shellcheck-py/shellcheck-py
+  rev: "v0.8.0.4"
+  hooks:
+  - id: shellcheck

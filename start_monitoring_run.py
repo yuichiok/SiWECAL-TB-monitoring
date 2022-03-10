@@ -11,6 +11,7 @@ import os
 import queue
 import shutil
 import subprocess
+import threading
 import time
 
 tb_analysis_dir = os.path.join(
@@ -32,6 +33,7 @@ monitoring_subfolders = dict(
     tmp_dir="tmp",
     converted_dir="converted",
     build_dir="build",
+    snapshot_dir="snapshots",
 )
 file_paths.update(**monitoring_subfolders)
 my_paths = collections.namedtuple("Paths", file_paths.keys())(**file_paths)
@@ -43,10 +45,9 @@ get_root_str = (
 class Priority(enum.IntEnum):
     """For job scheduling. Lowest value is executed first."""
 
-    MONITORING = 1
+    SNAP_SHOT = 1
     EVENT_BUILDING = 2
     CONVERSION = 3
-    DONE = 4
 
 
 def create_directory_structure(run_output_dir):
@@ -101,8 +102,10 @@ def cleanup_temporary(output_dir, logger):
 def configure_logging(logger, log_file=None):
     """TODO: Nicer formatting. Maybe different for console and file."""
     logger.setLevel("DEBUG")
-    FORMAT = "%(asctime)s[%(levelname)-5.5s:%(name)s %(threadName)-50.50s] %(message)s"
+    # FORMAT = "%(asctime)s[%(levelname)-5.5s:%(name)s %(threadName)s] %(message)s"
+    FORMAT = "[%(levelname)-5.5s%(threadName)s🕙%(asctime)s] %(message)s"
     fmt = logging.Formatter(FORMAT, datefmt="%H:%M:%S")
+    threading.current_thread().name = "🧠  "
 
     console_handler = logging.StreamHandler()
     console_handler.setFormatter(fmt=fmt)
@@ -121,7 +124,7 @@ def log_unexpected_error_subprocess(logger, subprocess_return, add_context=""):
     logger.error(subprocess_return)
     logger.error(
         f"💣Unexpected error{add_context}. "
-        "Maybe the lign above with return information "
+        "Maybe the line above with return information "
         "from the subprocess can help to understand the issue?🙈"
     )
 
@@ -183,13 +186,13 @@ class EcalMonitoring:
         except FileNotFoundError:
             self.logger.error(
                 "⛔Aborted. CERN root not available. "
-                "💡Tipp: try the environment at\n" + get_root_str
+                "💡Hint: try the environment at\n" + get_root_str
             )
             exit()
         env_py_v = ""
         try:
             # This is not necessarily the python that runs this script, but
-            # the one that will run the eventbuiling (and is linked with ROOT).
+            # the one that will run the eventbuilding (and is linked with ROOT).
             ret = subprocess.run(["python", "--version"], capture_output=True)
             # Python2 writes version info to sys.stderr, Python3 to sys.stderr.
             env_py_v = ret.stdout + ret.stderr
@@ -205,7 +208,7 @@ class EcalMonitoring:
             self.logger.warning(
                 "🐌Using pyROOT with python2 for eventbuilding is not technically "
                 f"forbidden, but discouraged for performance reasons: {env_py_v}. "
-                "💡Tipp: try the environment at\n" + get_root_str
+                "💡Hint: try the environment at\n" + get_root_str
             )
 
     def _read_config(self, config_file):
@@ -260,9 +263,21 @@ class EcalMonitoring:
             )
         self.eventbuilding_args["id_run"] = config["eventbuilding"].getint("id_run")
 
+        _s_after = config["snapshot"].get("after", "")
+        try:
+            self._snapshot_after = list(int(_s_after))
+        except ValueError:
+            self._snapshot_after = list(map(int, filter(len, _s_after.split(","))))
+        if "every" in config["snapshot"]:
+            self._snapshot_every = config["snapshot"].getint("every")
+        else:
+            self._snapshot_every = 10000
+        self._delete_previous_snaphots = config["snapshot"].getboolean(
+            "delete_previous", False
+        )
+
         with open(os.path.join(self.output_dir, my_paths.default_config), "w") as f:
             config.write(f)
-        self.logger.info("Config file written.")
         return config
 
     def create_masking(self):
@@ -302,28 +317,34 @@ class EcalMonitoring:
 
     def start_loop(self):
         self._largest_raw_dat = 0
+        self._last_n_monitored = 0
         self._run_finished = False
         self._time_last_raw_check = 0
+        self._datetime_last_snapshot = datetime.datetime.now()
         self._time_last_job = time.time()
         job_queue = queue.PriorityQueue()
+        current_build_queue = queue.Queue(maxsize=1)
+        current_build_queue.put(os.path.join(self.output_dir, my_paths.current_build))
         with concurrent.futures.ThreadPoolExecutor() as executor:
             futures = []
             for i in range(self.max_workers):
-                futures.append(executor.submit(self.find_and_do_job, job_queue))
+                job_args = [job_queue, current_build_queue, i]
+                futures.append(executor.submit(self.find_and_do_job, *job_args))
                 time.sleep(1)  # Head start for the startup bookkeeping.
             done, not_done = concurrent.futures.wait(
                 futures,
                 return_when=concurrent.futures.ALL_COMPLETED,
             )
+        self._wrap_up(current_build_queue)
         self.logger.info(
             "💡If this script does not finish soon, there is an unexpected error. "
         )
         self.logger.info(
             "🛬The run has finished. The monitoring has treated all files. "
         )
-        self._debug_future_returns(done, not_done, job_queue)
+        self._debug_future_returns(done, not_done, job_queue, current_build_queue)
 
-    def _debug_future_returns(self, done, not_done, job_queue):
+    def _debug_future_returns(self, done, not_done, job_queue, current_build_queue):
         """Check the futures for issues. Added for debugging; should be fast."""
         had_exception = False
         for p in done:
@@ -343,9 +364,12 @@ class EcalMonitoring:
         assert len(not_done) == 0
         if not had_exception and not hasattr(self, "_stopped_gracefully"):
             job_queue.join()
+        assert current_build_queue.qsize() == 1, current_build_queue.queue
 
-    def find_and_do_job(self, job_queue):
+    def find_and_do_job(self, job_queue, current_build_queue, i_worker=0):
+        threading.current_thread().name = f"👷{i_worker:02}"
         while True:
+            self._look_for_snapshot_request(job_queue)
             # The try is not technically thread safe, but good enough here.
             try:
                 assert job_queue.queue[0][0] < Priority.CONVERSION
@@ -363,7 +387,6 @@ class EcalMonitoring:
                             f"This was requested by {file_stop_gracefully}."
                         )
                 return
-
             try:
                 priority, neg_id_dat, in_file = job_queue.get(timeout=2)
             except queue.Empty:
@@ -372,15 +395,16 @@ class EcalMonitoring:
                 converted_file = self.convert_to_root(in_file)
                 job_queue.put((Priority.EVENT_BUILDING, neg_id_dat, converted_file))
             elif priority == Priority.EVENT_BUILDING:
-                build_file = self.run_eventbuilding(in_file, -neg_id_dat)
-                job_queue.put((Priority.MONITORING, neg_id_dat, build_file))
-            elif priority == Priority.MONITORING:
-                print("#TODO")
+                build_file = self.run_eventbuilding(
+                    in_file, -neg_id_dat, current_build_queue
+                )
+                job_queue.put((Priority.SNAP_SHOT, neg_id_dat, build_file))
+            elif priority == Priority.SNAP_SHOT:
+                self.get_snapshot(current_build_queue)
             else:
                 raise NotImplementedError(priority)
             job_queue.task_done()
             self._time_last_job = time.time()
-            self.logger.debug(f"🌟One task done: {priority.name}, {in_file}")
 
     def _look_for_new_raw(self, job_queue):
         if self._run_finished:
@@ -409,6 +433,25 @@ class EcalMonitoring:
             )
         self._alert_is_idle(file_run_finished)
 
+    def _look_for_snapshot_request(self, job_queue):
+        schedule_snapshot = False
+        file_get_snapshot = os.path.join(self.output_dir, "get_snapshot")
+        if os.path.exists(file_get_snapshot):
+            os.remove(file_get_snapshot)
+            schedule_snapshot = True
+        n_build_parts = len(
+            os.listdir(os.path.join(self.output_dir, my_paths.build_dir))
+        )
+        for ss_after in self._snapshot_after:
+            if self._last_n_monitored < ss_after <= n_build_parts:
+                schedule_snapshot = True
+        for ss_after in range(0, n_build_parts + 1, self._snapshot_every):
+            if self._last_n_monitored < ss_after <= n_build_parts:
+                schedule_snapshot = True
+        if schedule_snapshot:
+            self._last_n_monitored = max(self._last_n_monitored, n_build_parts)
+            job_queue.put((Priority.SNAP_SHOT, 0, "field not used for snapshot"))
+
     def _alert_is_idle(self, file_run_finished, seconds_before_alert=60):
         time_without_jobs = time.time() - self._time_last_job
         n_idle_infos = getattr(self, "_n_idle_infos", 1)
@@ -427,9 +470,9 @@ class EcalMonitoring:
             f"indicates the end of the run: {file_run_finished}. "
         )
         self.logger.info(
-            "💡Tipp: To exit this inifinite loop gracefully, and perform "
+            "💡Hint: To exit this infinite loop gracefully, and perform "
             "the end-of run computations, create a dummy version of that file. "
-            f"To supress this info, create the file {file_suppress_idle_info}. "
+            f"To suppress this info, create the file {file_suppress_idle_info}. "
         )
 
     def convert_to_root(self, raw_file_path):
@@ -453,10 +496,13 @@ class EcalMonitoring:
             log_unexpected_error_subprocess(self.logger, ret, " during convert_to_root")
             exit()
         os.rename(tmp_path, out_path)
+        self.logger.debug(
+            f"🌱New converted file " f"{os.path.basename(out_path)} at {out_path}."
+        )
         return out_path
 
-    def run_eventbuilding(self, convered_path, id_dat):
-        converted_name = os.path.basename(convered_path)
+    def run_eventbuilding(self, converted_path, id_dat, current_build_queue):
+        converted_name = os.path.basename(converted_path)
         build_name = converted_name.replace("converted_", "build_")
         out_path = os.path.join(self.output_dir, my_paths.build_dir, build_name)
         if os.path.exists(out_path):
@@ -481,40 +527,25 @@ class EcalMonitoring:
                 self.logger, ret, " during run_eventbuilding"
             )
             exit()
-        self.merge_eventbuilding(tmp_path)
+        self.merge_eventbuilding(tmp_path, current_build_queue)
         os.rename(tmp_path, out_path)
+        self.logger.debug(
+            f"🔨New event file " f"{os.path.basename(out_path)} at {out_path}."
+        )
         return out_path
 
-    def merge_eventbuilding(self, part_path):
-        curr = os.path.join(self.output_dir, my_paths.current_build)
-        temp = os.path.join(self.output_dir, my_paths.tmp_dir, my_paths.current_build)
-        if os.path.exists(temp):
-            # Only one partial buildfile should try to be merged at any time.
-            time.sleep(1)
-            return self.merge_eventbuilding(part_path)
-        else:
-            # Quickly create the temp file.
-            # The shutil.copy call below needs a few atomic operations before it
-            # creates the file.
-            # During that time, we can create a race condition where to processes
-            # try to run the merging.
-            # This would not be catastrophic (one build_dat.root file will loose
-            # the race and simply error out).
-            # But it does mean we have to restart the monitoring afterwards,
-            # to reprocess this single file.
-            # That might be confusing for a user, so let's better avoid it.
-            open(temp, "a").close()
-        try:
-            shutil.copy(curr, temp)
-        except FileNotFoundError:
-            os.rename(part_path, curr)
-            shutil.copy(curr, part_path)
-            return
+    def merge_eventbuilding(self, part_path, current_build_queue):
+        current_build = current_build_queue.get()
+        if not os.path.exists(current_build):
+            # The first build.root part that was finished.
+            shutil.copy(part_path, current_build)
 
         root_macro_dir = os.path.join(
             os.path.dirname(os.path.abspath(__file__)), "continuous_event_building"
         )
-        root_call = f'"mergeSelective.C(\\"{temp}\\", \\"{part_path}\\", \\"ecal\\")"'
+        root_call = (
+            f'"mergeSelective.C(\\"{current_build}\\", \\"{part_path}\\", \\"ecal\\")"'
+        )
         ret = subprocess.run(
             "root -b -l -q " + root_call,
             shell=True,
@@ -526,7 +557,82 @@ class EcalMonitoring:
                 self.logger, ret, " during merge_eventbuilding"
             )
             exit()
-        os.rename(temp, curr)
+        current_build_queue.put(current_build)
+        current_build_queue.task_done()
+
+    def get_snapshot(
+        self,
+        current_build_queue=None,
+        build_file=None,
+        snap_path=None,
+        force_snapshot=False,
+    ):
+        now = datetime.datetime.now()
+        if (now - self._datetime_last_snapshot).seconds < 30 and not force_snapshot:
+            return False
+        else:
+            self._datetime_last_snapshot = now
+        if snap_path is None:
+            snap_name = now.strftime("%Y-%m-%d-%H%M%S") + ".root"
+            snap_path = os.path.join(self.output_dir, my_paths.snapshot_dir, snap_name)
+        else:
+            snap_name = os.path.basename(snap_path)
+        tmp_snap_path = os.path.join(
+            self.output_dir, my_paths.tmp_dir, os.path.basename(snap_path)
+        )
+        n_build_parts = len(
+            os.listdir(os.path.join(self.output_dir, my_paths.build_dir))
+        )
+        if self._last_n_monitored < n_build_parts:
+            self._last_n_monitored = n_build_parts
+        elif not force_snapshot:
+            return False
+        if build_file is None:
+            build_file = current_build_queue.get()
+            shutil.copy(
+                build_file,
+                tmp_snap_path,
+            )
+            current_build_queue.put(build_file)
+            current_build_queue.task_done()
+
+        shutil.copy(
+            build_file,
+            tmp_snap_path,
+        )
+        ret = subprocess.run(
+            f"./decorate.py {tmp_snap_path}",
+            shell=True,
+            capture_output=True,
+            cwd=os.path.dirname(os.path.abspath(__file__)),
+        )
+        if ret.returncode != 0 or ret.stderr != b"":
+            log_unexpected_error_subprocess(self.logger, ret, " during get_snapshot")
+            exit()
+        os.rename(tmp_snap_path, snap_path)
+        if self._delete_previous_snaphots:
+            snap_dir = os.path.join(self.output_dir, my_paths.snapshot_dir)
+            for f in os.listdir(snap_dir):
+                if f == snap_name:
+                    continue
+                f_path = os.path.join(snap_dir, f)
+                if f.startswith("202") and os.path.isfile(f_path):
+                    os.remove(f_path)
+        self.logger.debug(
+            f"🔎A new monitoring snapshot is ready: {snap_name} at {snap_path}."
+        )
+        return snap_path
+
+    def _wrap_up(self, current_build_queue):
+        build_file = current_build_queue.get()
+        self.get_snapshot(
+            current_build_queue=None,
+            build_file=build_file,
+            snap_path=os.path.join(self.output_dir, "full_run.root"),
+            force_snapshot=True,
+        )
+        current_build_queue.put(build_file)
+        current_build_queue.task_done()
 
 
 if __name__ == "__main__":
@@ -542,4 +648,3 @@ if __name__ == "__main__":
     )
     monitoring = EcalMonitoring(**vars(parser.parse_args()))
     monitoring.start_loop()
-    exit()

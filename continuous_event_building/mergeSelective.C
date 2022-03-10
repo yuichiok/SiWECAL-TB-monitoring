@@ -1,8 +1,6 @@
-void mergeSelective(
-  TString current_build="build.root",
-  TString new_build_part="build_dat001.root",
-  TString tree_name="ecal"
-) {
+void mergeSelective(TString current_build = "build.root",
+                    TString new_build_part = "build_dat001.root",
+                    TString tree_name = "ecal") {
   //------------------------------------
   // From the new file, only use the ecal TTree.
   //------------------------------------
