@@ -1,0 +1,51 @@
+name: "Tests on dummy data"
+
+on:
+  pull_request:
+  push:
+
+jobs:
+  dummy-data:
+    strategy:
+      matrix:
+        run-name: ["dummy_run_123456"]
+    runs-on: ubuntu-latest
+
+    # Required for miniconda to activate conda.
+    defaults:
+      run:
+        shell: "bash -l {0}"
+
+    steps:
+      - uses: "actions/checkout@v2"
+        with:
+          submodules: recursive
+
+      - name: "Get conda"
+        uses: "conda-incubator/setup-miniconda@v2"
+        with:
+          auto-update-conda: true
+          python-version: 3.8
+          channels: "conda-forge"
+
+      - name: "Install standard dependencies"
+        run: |
+          conda env list
+          conda info
+          conda install numpy root
+          conda list
+
+      - name: "Create the dummy data"
+        run: |
+          ./example/create_dummy.py --n_dat 20 --n_dat_entries 500
+
+      - name: "Run the monitoring loop"
+        run: |
+          touch example/${{ matrix.run-name }}/hitsHistogram.txt
+          ./start_monitoring_run.py example/${{ matrix.run-name }}
+
+      - name: "Run the build.root decoration"
+        run: |
+          cp data/${{ matrix.run-name }}/current_build.root data/${{ matrix.run-name }}/for_decoration.root
+          touch example/${{ matrix.run-name }}/hitsHistogram.txt
+          ./decorate.py example/${{ matrix.run-name }}/for_decoration.root --verbose
