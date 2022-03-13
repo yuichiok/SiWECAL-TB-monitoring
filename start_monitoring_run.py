@@ -539,24 +539,23 @@ class EcalMonitoring:
         if not os.path.exists(current_build):
             # The first build.root part that was finished.
             shutil.copy(part_path, current_build)
-
-        root_macro_dir = os.path.join(
-            os.path.dirname(os.path.abspath(__file__)), "continuous_event_building"
-        )
-        root_call = (
-            f'"mergeSelective.C(\\"{current_build}\\", \\"{part_path}\\", \\"ecal\\")"'
-        )
-        ret = subprocess.run(
-            "root -b -l -q " + root_call,
-            shell=True,
-            capture_output=True,
-            cwd=root_macro_dir,
-        )
-        if ret.returncode != 0 or ret.stderr != b"":
-            log_unexpected_error_subprocess(
-                self.logger, ret, " during merge_eventbuilding"
+        else:
+            root_macro_dir = os.path.join(
+                os.path.dirname(os.path.abspath(__file__)), "continuous_event_building"
             )
-            exit()
+            args = '\\"' + '\\", \\"'.join(current_build, part_path, "ecal") + '\\"'
+            root_call = f'"mergeSelective.C({args})"'
+            ret = subprocess.run(
+                "root -b -l -q " + root_call,
+                shell=True,
+                capture_output=True,
+                cwd=root_macro_dir,
+            )
+            if ret.returncode != 0 or ret.stderr != b"":
+                log_unexpected_error_subprocess(
+                    self.logger, ret, " during merge_eventbuilding"
+                )
+                exit()
         current_build_queue.put(current_build)
         current_build_queue.task_done()
 
