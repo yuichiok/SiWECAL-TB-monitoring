@@ -40,5 +40,4 @@ jobs:
         run: |
           source ${{ matrix.SETUP }}
           cp data/${{ matrix.run-name }}/current_build.root data/${{ matrix.run-name }}/for_decoration.root
-          touch example/${{ matrix.run-name }}/hitsHistogram.txt
-          ./decorate.py example/${{ matrix.run-name }}/for_decoration.root --verbose
+          ./decorate.py data/${{ matrix.run-name }}/for_decoration.root --verbose

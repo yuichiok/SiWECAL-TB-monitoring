@@ -455,6 +455,7 @@ class EcalMonitoring:
                             continue
                         elif self._current_jobs[i] == Priority.MERGE_EVENT_BUILDING:
                             break
+                    else:
                         job_queue.put((Priority.MERGE_EVENT_BUILDING, 0, "not used"))
             elif priority == Priority.SNAP_SHOT:
                 self.get_snapshot(queues["current_build"])
