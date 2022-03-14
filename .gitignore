@@ -1,3 +1,5 @@
 data
+example/dummy_calibration
+example/dummy_run*
 # A possible linking destination for accessing the DAQ outputs:
 raw
