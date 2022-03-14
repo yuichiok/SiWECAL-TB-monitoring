@@ -1,5 +1,6 @@
 void eventsPerDat(TTree *ecal) {
-  for (Int_t run = ecal->GetMinimum("id_run"); run <= run_h; run++) {
+  Int_t run_id_max = ecal->GetMaximum("id_run");
+  for (Int_t run = ecal->GetMinimum("id_run"); run <= run_id_max; run++) {
     ecal->Draw(
         TString::Format(
             "event:id_dat >> eventsPerDat_%i(%i, %.1f, %.1f, %i, %.1f, %.1f)",
