@@ -45,9 +45,11 @@ get_root_str = (
 class Priority(enum.IntEnum):
     """For job scheduling. Lowest value is executed first."""
 
-    SNAP_SHOT = 1
-    EVENT_BUILDING = 2
-    CONVERSION = 3
+    MERGE_EVENT_BUILDING = 1
+    SNAP_SHOT = 2
+    EVENT_BUILDING = 3
+    CONVERSION = 4
+    IDLE = 5
 
 
 def create_directory_structure(run_output_dir):
@@ -322,52 +324,73 @@ class EcalMonitoring:
         self._time_last_raw_check = 0
         self._datetime_last_snapshot = datetime.datetime.now()
         self._time_last_job = time.time()
-        job_queue = queue.PriorityQueue()
-        current_build_queue = queue.Queue(maxsize=1)
-        current_build_queue.put(os.path.join(self.output_dir, my_paths.current_build))
+        self._current_jobs = [Priority.IDLE for _ in range(self.max_workers)]
+        queues = {}
+        queues["job"] = queue.PriorityQueue()
+        current_build = os.path.join(self.output_dir, my_paths.current_build)
+        queues["current_build"] = queue.Queue(maxsize=1)
+        queues["current_build"].put(current_build)
+        queues["merge"] = queue.LifoQueue()
         with concurrent.futures.ThreadPoolExecutor() as executor:
             futures = []
             for i in range(self.max_workers):
-                job_args = [job_queue, current_build_queue, i]
+                job_args = [queues, i]
                 futures.append(executor.submit(self.find_and_do_job, *job_args))
                 time.sleep(1)  # Head start for the startup bookkeeping.
+            self._debug_future_returns(futures, queues)
+        self._wrap_up(queues)
+        self.logger.info(
+            "🛬The run has finished. The monitoring has treated all files. "
+        )
+
+    def _debug_future_returns(self, futures, queues):
+        """Check the futures for issues. Added for debugging; should be fast."""
+        done, not_done = concurrent.futures.wait(
+            futures,
+            return_when=concurrent.futures.FIRST_EXCEPTION,
+        )
+        self.logger.info(
+            "💡If this script does not finish soon, there is an unexpected error. "
+        )
+        if len(not_done) != 0:
+            self.logger.warning(
+                f"🔥🚒 A worker threw an exception. "
+                f"{len(not_done)}/{len(futures)} jobs were still ongoing. "
+                "They are shut down now so that you can investigate the problem."
+            )
+            open(os.path.join(self.output_dir, "stop_monitoring"), "w").close()
             done, not_done = concurrent.futures.wait(
                 futures,
                 return_when=concurrent.futures.ALL_COMPLETED,
             )
-        self._wrap_up(current_build_queue)
-        self.logger.info(
-            "💡If this script does not finish soon, there is an unexpected error. "
-        )
-        self.logger.info(
-            "🛬The run has finished. The monitoring has treated all files. "
-        )
-        self._debug_future_returns(done, not_done, job_queue, current_build_queue)
-
-    def _debug_future_returns(self, done, not_done, job_queue, current_build_queue):
-        """Check the futures for issues. Added for debugging; should be fast."""
         had_exception = False
         for p in done:
             if p.exception() is not None:
                 had_exception = True
                 self.logger.error(
-                    f"At least one thread raised an exception: {p.exception()}."
+                    f"At least one worker raised an exception: {p.exception()}."
                 )
                 try:
                     p.result()
                 except Exception as e:
                     self.logger.exception(e)
+                    exit()
             else:
                 if p.result() is not None:
                     self.logger.error(f"p.result()={p.result()}")
                     raise NotImplementedError
-        assert len(not_done) == 0
         if not had_exception and not hasattr(self, "_stopped_gracefully"):
-            job_queue.join()
-        assert current_build_queue.qsize() == 1, current_build_queue.queue
+            queues["job"].join()
+        assert queues["current_build"].qsize() == 1, queues["current_build"].queue
+        dir_converted = os.path.join(self.output_dir, my_paths.converted_dir)
+        dir_build = os.path.join(self.output_dir, my_paths.build_dir)
+        n_converted = len(os.listdir(dir_converted))
+        n_build = len(os.listdir(dir_build))
+        assert n_converted == n_build, f"{n_converted} != {n_build}"
 
-    def find_and_do_job(self, job_queue, current_build_queue, i_worker=0):
+    def find_and_do_job(self, queues, i_worker=0):
         threading.current_thread().name = f"👷{i_worker:02}"
+        job_queue = queues["job"]
         while True:
             self._look_for_snapshot_request(job_queue)
             # The try is not technically thread safe, but good enough here.
@@ -390,17 +413,31 @@ class EcalMonitoring:
             try:
                 priority, neg_id_dat, in_file = job_queue.get(timeout=2)
             except queue.Empty:
+                self._current_jobs[i_worker] = Priority.IDLE
                 continue
+            self._current_jobs[i_worker] = priority
             if priority == Priority.CONVERSION:
                 converted_file = self.convert_to_root(in_file)
                 job_queue.put((Priority.EVENT_BUILDING, neg_id_dat, converted_file))
             elif priority == Priority.EVENT_BUILDING:
-                build_file = self.run_eventbuilding(
-                    in_file, -neg_id_dat, current_build_queue
-                )
-                job_queue.put((Priority.SNAP_SHOT, neg_id_dat, build_file))
+                tmp_build = self.run_eventbuilding(in_file, -neg_id_dat)
+                job_queue.put((Priority.MERGE_EVENT_BUILDING, 0, "not used"))
+                queues["merge"].put(tmp_build)
+            elif priority == Priority.MERGE_EVENT_BUILDING:
+                try:
+                    self.merge_eventbuilding(queues)
+                    job_queue.put((Priority.SNAP_SHOT, 0, "not used"))
+                except queue.Empty:
+                    # Purpose of this loop: Have only one worker at a time
+                    # waiting for the chance to merge build files.
+                    for i in range(len(self._current_jobs)):
+                        if i == i_worker:
+                            continue
+                        elif self._current_jobs[i] == Priority.MERGE_EVENT_BUILDING:
+                            break
+                        job_queue.put((Priority.MERGE_EVENT_BUILDING, 0, "not used"))
             elif priority == Priority.SNAP_SHOT:
-                self.get_snapshot(current_build_queue)
+                self.get_snapshot(queues["current_build"])
             else:
                 raise NotImplementedError(priority)
             job_queue.task_done()
@@ -450,7 +487,7 @@ class EcalMonitoring:
                 schedule_snapshot = True
         if schedule_snapshot:
             self._last_n_monitored = max(self._last_n_monitored, n_build_parts)
-            job_queue.put((Priority.SNAP_SHOT, 0, "field not used for snapshot"))
+            job_queue.put((Priority.SNAP_SHOT, 0, "not used"))
 
     def _alert_is_idle(self, file_run_finished, seconds_before_alert=60):
         time_without_jobs = time.time() - self._time_last_job
@@ -501,7 +538,7 @@ class EcalMonitoring:
         )
         return out_path
 
-    def run_eventbuilding(self, converted_path, id_dat, current_build_queue):
+    def run_eventbuilding(self, converted_path, id_dat):
         converted_name = os.path.basename(converted_path)
         build_name = converted_name.replace("converted_", "build_")
         out_path = os.path.join(self.output_dir, my_paths.build_dir, build_name)
@@ -527,23 +564,34 @@ class EcalMonitoring:
                 self.logger, ret, " during run_eventbuilding"
             )
             exit()
-        self.merge_eventbuilding(tmp_path, current_build_queue)
-        os.rename(tmp_path, out_path)
-        self.logger.debug(
-            f"🔨New event file " f"{os.path.basename(out_path)} at {out_path}."
-        )
-        return out_path
+        return tmp_path
 
-    def merge_eventbuilding(self, part_path, current_build_queue):
-        current_build = current_build_queue.get()
+    def merge_eventbuilding(self, queues):
+        current_build = queues["current_build"].get(timeout=2)
+        files_to_merge = []
+        while queues["merge"].qsize():
+            files_to_merge.append(queues["merge"].get(timeout=0.1))
+        for tmp_path in files_to_merge:
+            self._single_merge_eventbuilding(tmp_path, current_build)
+            queues["merge"].task_done()
+        queues["current_build"].put(current_build)
+        queues["current_build"].task_done()
+        if queues["merge"].qsize():
+            self.merge_eventbuilding(queues)
+
+    def _single_merge_eventbuilding(self, tmp_path, current_build):
+        build_name = os.path.basename(tmp_path)
+        part_path = os.path.join(self.output_dir, my_paths.build_dir, build_name)
+        if os.path.exists(part_path):
+            return part_path
         if not os.path.exists(current_build):
             # The first build.root part that was finished.
-            shutil.copy(part_path, current_build)
+            shutil.copy(tmp_path, current_build)
         else:
             root_macro_dir = os.path.join(
                 os.path.dirname(os.path.abspath(__file__)), "continuous_event_building"
             )
-            args = '\\"' + '\\", \\"'.join(current_build, part_path, "ecal") + '\\"'
+            args = '\\"' + '\\", \\"'.join((current_build, tmp_path, "ecal")) + '\\"'
             root_call = f'"mergeSelective.C({args})"'
             ret = subprocess.run(
                 "root -b -l -q " + root_call,
@@ -556,8 +604,10 @@ class EcalMonitoring:
                     self.logger, ret, " during merge_eventbuilding"
                 )
                 exit()
-        current_build_queue.put(current_build)
-        current_build_queue.task_done()
+        os.rename(tmp_path, part_path)
+        self.logger.debug(
+            f"🔨New event file " f"{os.path.basename(part_path)} at {part_path}."
+        )
 
     def get_snapshot(
         self,
@@ -622,16 +672,27 @@ class EcalMonitoring:
         )
         return snap_path
 
-    def _wrap_up(self, current_build_queue):
-        build_file = current_build_queue.get()
-        self.get_snapshot(
-            current_build_queue=None,
-            build_file=build_file,
-            snap_path=os.path.join(self.output_dir, "full_run.root"),
-            force_snapshot=True,
-        )
-        current_build_queue.put(build_file)
-        current_build_queue.task_done()
+    def _wrap_up(self, queues):
+        current_build_queue = queues["current_build"]
+        if current_build_queue.empty():
+            self.logger.warning(
+                "🤷The wrap-up has to be skipped. "
+                "No access to the final buildfile was granted."
+            )
+        else:
+            if hasattr(self, "_stopped_gracefully") and self._stopped_gracefully:
+                snapshot_name = "stopped_run.root"
+            else:
+                snapshot_name = "full_run.root"
+            build_file = current_build_queue.get()
+            self.get_snapshot(
+                current_build_queue=None,
+                build_file=build_file,
+                snap_path=os.path.join(self.output_dir, snapshot_name),
+                force_snapshot=True,
+            )
+            current_build_queue.put(build_file)
+            current_build_queue.task_done()
 
 
 if __name__ == "__main__":

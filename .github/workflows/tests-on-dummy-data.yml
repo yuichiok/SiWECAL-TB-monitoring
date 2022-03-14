@@ -10,6 +10,7 @@ jobs:
       matrix:
         run-name: ["dummy_run_123456"]
     runs-on: ubuntu-latest
+    timeout-minutes: 30
 
     # Required for miniconda to activate conda.
     defaults:
@@ -43,6 +44,10 @@ jobs:
         run: |
           touch example/${{ matrix.run-name }}/hitsHistogram.txt
           ./start_monitoring_run.py example/${{ matrix.run-name }}
+
+      - name: "Check that monitoring ran without issues"
+        run: |
+          if [[ "$(grep -o "ERROR" data/${{ matrix.run-name }}/log_monitoring.log | wc -l)" != "0" ]]; then exit 1; fi
 
       - name: "Run the build.root decoration"
         run: |
