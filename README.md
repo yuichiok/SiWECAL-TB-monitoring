@@ -1,5 +1,9 @@
 # SiWECAL-TB-monitoring
 
+[![Tests on dummy data](https://github.com/SiWECAL-TestBeam/SiWECAL-TB-monitoring/actions/workflows/tests-on-dummy-data.yml/badge.svg)](https://github.com/SiWECAL-TestBeam/SiWECAL-TB-monitoring/actions/workflows/tests-on-dummy-data.yml)
+[![pre-commit](https://github.com/SiWECAL-TestBeam/SiWECAL-TB-monitoring/actions/workflows/pre-commit.yml/badge.svg)](https://github.com/SiWECAL-TestBeam/SiWECAL-TB-monitoring/actions/workflows/pre-commit.yml)
+![GitHub repo size](https://img.shields.io/github/repo-size/SiWECAL-TestBeam/SiWECAL-TB-monitoring)
+
 Event-based almost-online monitoring for the SiW ECAL.
 
 ## Submodules
