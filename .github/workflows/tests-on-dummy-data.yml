@@ -9,39 +9,26 @@ jobs:
     strategy:
       matrix:
         run-name: ["dummy_run_123456"]
+        SETUP: ["/cvmfs/sft.cern.ch/lcg/views/LCG_99/x86_64-ubuntu2004-gcc9-opt/setup.sh"]
     runs-on: ubuntu-latest
     timeout-minutes: 30
-
-    # Required for miniconda to activate conda.
-    defaults:
-      run:
-        shell: "bash -l {0}"
 
     steps:
       - uses: "actions/checkout@v2"
         with:
           submodules: recursive
-
-      - name: "Get conda"
-        uses: "conda-incubator/setup-miniconda@v2"
+      - uses: cvmfs-contrib/github-action-cvmfs@v2
         with:
-          auto-update-conda: true
-          python-version: 3.8
-          channels: "conda-forge"
-
-      - name: "Install standard dependencies"
-        run: |
-          conda env list
-          conda info
-          conda install numpy root
-          conda list
+          cvmfs_repositories: "sft.cern.ch"
 
       - name: "Create the dummy data"
         run: |
+          source ${{ matrix.SETUP }}
           ./example/create_dummy.py --n_dat 20 --n_dat_entries 500
 
       - name: "Run the monitoring loop"
         run: |
+          source ${{ matrix.SETUP }}
           touch example/${{ matrix.run-name }}/hitsHistogram.txt
           ./start_monitoring_run.py example/${{ matrix.run-name }}
 
@@ -51,6 +38,7 @@ jobs:
 
       - name: "Run the build.root decoration"
         run: |
+          source ${{ matrix.SETUP }}
           cp data/${{ matrix.run-name }}/current_build.root data/${{ matrix.run-name }}/for_decoration.root
           touch example/${{ matrix.run-name }}/hitsHistogram.txt
           ./decorate.py example/${{ matrix.run-name }}/for_decoration.root --verbose
