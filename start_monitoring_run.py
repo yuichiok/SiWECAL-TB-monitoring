@@ -52,6 +52,24 @@ class Priority(enum.IntEnum):
     IDLE = 5
 
 
+def priority_string(prios):
+    chars = []
+    for prio in prios:
+        if prio is Priority.MERGE_EVENT_BUILDING:
+            chars.append("🔗")
+        elif prio is Priority.SNAP_SHOT:
+            chars.append("🔎")
+        elif prio is Priority.EVENT_BUILDING:
+            chars.append("🔨")
+        elif prio is Priority.CONVERSION:
+            chars.append("🌱")
+        elif prio is Priority.IDLE:
+            chars.append("⌛")
+        else:
+            raise Exception(prio)
+    return "".join(chars)
+
+
 def create_directory_structure(run_output_dir):
     if not os.path.exists(run_output_dir):
         os.mkdir(run_output_dir)
@@ -416,6 +434,7 @@ class EcalMonitoring:
                 self._current_jobs[i_worker] = Priority.IDLE
                 continue
             self._current_jobs[i_worker] = priority
+            print(priority_string(self._current_jobs), end="\r")
             if priority == Priority.CONVERSION:
                 converted_file = self.convert_to_root(in_file)
                 job_queue.put((Priority.EVENT_BUILDING, neg_id_dat, converted_file))
