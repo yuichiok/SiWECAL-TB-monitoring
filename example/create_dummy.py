@@ -3,6 +3,7 @@ import argparse
 import itertools
 import os
 import random
+import sys
 
 random.seed(202203)
 
@@ -251,7 +252,7 @@ if __name__ == "__main__":
     mip(os.path.join(dummy_calib_dir, "MIP_dummy_lowgain.txt"), dims)
 
     if args.config:
-        exit()
+        sys.exit(0)
     else:
         dummy_run_dir = os.path.join(example_dir, "dummy_run_123456")
         if not os.path.exists(dummy_run_dir):

@@ -11,6 +11,7 @@ import os
 import queue
 import shutil
 import subprocess
+import sys
 import threading
 import time
 
@@ -98,7 +99,7 @@ def cleanup_temporary(output_dir, logger):
             "To nevertheless use this output directory it suffices to"
             " create an empty file with this name."
         )
-        exit()
+        sys.exit(1)
 
     # Move run-level files to a timestamped version, so they can be recreated.
     old_file_suffix = "_" + datetime.datetime.now().strftime("%Y-%m-%d-%H%M%S")
@@ -208,7 +209,7 @@ class EcalMonitoring:
                 "⛔Aborted. CERN root not available. "
                 "💡Hint: try the environment at\n" + get_root_str
             )
-            exit()
+            sys.exit(1)
         env_py_v = ""
         try:
             # This is not necessarily the python that runs this script, but
@@ -321,7 +322,7 @@ class EcalMonitoring:
         settings_file_not_read = output_lines[2] == root_macro_issue_stdout
         if ret.returncode != 0 or settings_file_not_read:
             log_unexpected_error_subprocess(self.logger, ret, " during create_masking")
-            exit()
+            sys.exit(1)
         assert not any(
             [line == root_macro_issue_stdout for line in output_lines]
         ), "This condition should be unreachable."
@@ -392,7 +393,7 @@ class EcalMonitoring:
                     p.result()
                 except Exception as e:
                     self.logger.exception(e)
-                    exit()
+                    sys.exit(1)
             else:
                 if p.result() is not None:
                     self.logger.error(f"p.result()={p.result()}")
@@ -550,7 +551,7 @@ class EcalMonitoring:
         )
         if ret.returncode != 0 or ret.stderr != b"":
             log_unexpected_error_subprocess(self.logger, ret, " during convert_to_root")
-            exit()
+            sys.exit(1)
         os.rename(tmp_path, out_path)
         self.logger.debug(
             f"🌱New converted file " f"{os.path.basename(out_path)} at {out_path}."
@@ -582,7 +583,7 @@ class EcalMonitoring:
             log_unexpected_error_subprocess(
                 self.logger, ret, " during run_eventbuilding"
             )
-            exit()
+            sys.exit(1)
         return tmp_path
 
     def merge_eventbuilding(self, queues):
@@ -622,7 +623,7 @@ class EcalMonitoring:
                 log_unexpected_error_subprocess(
                     self.logger, ret, " during merge_eventbuilding"
                 )
-                exit()
+                sys.exit(1)
         os.rename(tmp_path, part_path)
         self.logger.debug(
             f"🔨New event file " f"{os.path.basename(part_path)} at {part_path}."
@@ -676,7 +677,7 @@ class EcalMonitoring:
         )
         if ret.returncode != 0 or ret.stderr != b"":
             log_unexpected_error_subprocess(self.logger, ret, " during get_snapshot")
-            exit()
+            sys.exit(1)
         os.rename(tmp_snap_path, snap_path)
         if self._delete_previous_snaphots:
             snap_dir = os.path.join(self.output_dir, my_paths.snapshot_dir)
