@@ -61,8 +61,8 @@ def without_tar(path):
 class Priority(enum.IntEnum):
     """For job scheduling. Lowest value is executed first."""
 
-    MERGE_EVENT_BUILDING = 1
-    SNAP_SHOT = 2
+    SNAP_SHOT = 1
+    MERGE_EVENT_BUILDING = 2
     EVENT_BUILDING = 3
     CONVERSION = 4
     IDLE = 5
@@ -361,6 +361,7 @@ class EcalMonitoring:
     def start_loop(self):
         self._largest_raw_dat = 0
         self._last_n_monitored = 0
+        self._snapshot_needs_current_build = False
         self._run_finished = False
         self._time_last_raw_check = 0
         self._datetime_last_snapshot = datetime.datetime.now()
@@ -470,7 +471,7 @@ class EcalMonitoring:
             elif priority == Priority.MERGE_EVENT_BUILDING:
                 try:
                     self.merge_eventbuilding(queues)
-                    job_queue.put((Priority.SNAP_SHOT, 0, "not used"))
+                    self._look_for_snapshot_request(job_queue, check_scheduled=True)
                 except queue.Empty:
                     # Purpose of this loop: Have only one worker at a time
                     # waiting for the chance to merge build files.
@@ -520,23 +521,24 @@ class EcalMonitoring:
             )
         self._alert_is_idle(file_run_finished)
 
-    def _look_for_snapshot_request(self, job_queue):
+    def _look_for_snapshot_request(self, job_queue, check_scheduled=False):
         schedule_snapshot = False
         file_get_snapshot = os.path.join(self.output_dir, "get_snapshot")
         if os.path.exists(file_get_snapshot):
             os.remove(file_get_snapshot)
             schedule_snapshot = True
-        n_build_parts = len(
-            os.listdir(os.path.join(self.output_dir, my_paths.build_dir))
-        )
-        for ss_after in self._snapshot_after:
-            if self._last_n_monitored < ss_after <= n_build_parts:
-                schedule_snapshot = True
-        for ss_after in range(0, n_build_parts + 1, self._snapshot_every):
-            if self._last_n_monitored < ss_after <= n_build_parts:
+        if check_scheduled:
+            n_build_parts = len(
+                os.listdir(os.path.join(self.output_dir, my_paths.build_dir))
+            )
+            for ss_after in self._snapshot_after:
+                if self._last_n_monitored < ss_after <= n_build_parts:
+                    schedule_snapshot = True
+                    break
+            next_it_every = n_build_parts // self._snapshot_every
+            if self._last_n_monitored < next_it_every * self._snapshot_every:
                 schedule_snapshot = True
         if schedule_snapshot:
-            self._last_n_monitored = max(self._last_n_monitored, n_build_parts)
             job_queue.put((Priority.SNAP_SHOT, 0, "not used"))
 
     def _alert_is_idle(self, file_run_finished, seconds_before_alert=60):
@@ -635,6 +637,8 @@ class EcalMonitoring:
         return tmp_path
 
     def merge_eventbuilding(self, queues):
+        while self._snapshot_needs_current_build:
+            time.sleep(1)
         current_build = queues["current_build"].get(timeout=2)
         files_to_merge = []
         while queues["merge"].qsize():
@@ -644,8 +648,6 @@ class EcalMonitoring:
             queues["merge"].task_done()
         queues["current_build"].put(current_build)
         queues["current_build"].task_done()
-        if queues["merge"].qsize():
-            self.merge_eventbuilding(queues)
 
     def _single_merge_eventbuilding(self, tmp_path, current_build):
         build_name = os.path.basename(tmp_path)
@@ -705,18 +707,20 @@ class EcalMonitoring:
         elif not force_snapshot:
             return False
         if build_file is None:
+            self._snapshot_needs_current_build = True
             build_file = current_build_queue.get()
             shutil.copy(
                 build_file,
                 tmp_snap_path,
             )
+            self._snapshot_needs_current_build = False
             current_build_queue.put(build_file)
             current_build_queue.task_done()
-
-        shutil.copy(
-            build_file,
-            tmp_snap_path,
-        )
+        else:
+            shutil.copy(
+                build_file,
+                tmp_snap_path,
+            )
         ret = subprocess.run(
             f"./decorate.py {tmp_snap_path}",
             shell=True,
