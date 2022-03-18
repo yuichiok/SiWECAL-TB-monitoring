@@ -12,6 +12,7 @@ import queue
 import shutil
 import subprocess
 import sys
+import tarfile
 import threading
 import time
 
@@ -41,6 +42,20 @@ my_paths = collections.namedtuple("Paths", file_paths.keys())(**file_paths)
 get_root_str = (
     "source /cvmfs/sft.cern.ch/lcg/views/LCG_99/x86_64-centos7-gcc10-opt/setup.sh"
 )
+
+
+def as_tar(path):
+    """If the file only exists in compressed form, return that compressed file."""
+    tar_path = path + ".tar.gz"
+    if not os.path.exists(path) and os.path.exists(tar_path):
+        return tar_path
+    return path
+
+
+def without_tar(path):
+    if path.endswith(".tar.gz"):
+        path = path[: -len(".tar.gz")]
+    return path
 
 
 class Priority(enum.IntEnum):
@@ -195,7 +210,7 @@ class EcalMonitoring:
         # Otherwise, os.path.basename == "" later on.
         raw_run_folder = os.path.realpath(raw_run_folder)
         assert os.path.isdir(raw_run_folder), raw_run_folder
-        run_settings = os.path.join(raw_run_folder, my_paths.run_settings)
+        run_settings = as_tar(os.path.join(raw_run_folder, my_paths.run_settings))
         assert os.path.exists(run_settings), (
             run_settings + " must exist in the raw_run_folder."
         )
@@ -256,7 +271,7 @@ class EcalMonitoring:
         configure_logging(self.logger, os.path.join(self.output_dir, my_paths.log_file))
         self.max_workers = int(get_with_fallback("monitoring", "max_workers", "10"))
         assert self.max_workers >= 1, self.max_workers
-        self._skip_dirty_dat = get_with_fallback("monitoring", "skip_dirty_dat", False)
+        self._skip_dirty_dat = config["monitoring"].getboolean("skip_dirty_dat", False)
 
         def ensure_calibration_exists(calib):
             file = os.path.abspath(config["eventbuilding"].get(calib))
@@ -304,10 +319,16 @@ class EcalMonitoring:
 
     def create_masking(self):
         tmp_run_settings = os.path.join(self.output_dir, my_paths.run_settings)
-        shutil.copy(
-            os.path.join(self.raw_run_folder, my_paths.run_settings),
-            tmp_run_settings,
-        )
+        run_settings = as_tar(os.path.join(self.raw_run_folder, my_paths.run_settings))
+        if run_settings.endswith(".tar.gz"):
+            with tarfile.open(run_settings) as tar:
+                tar.extractall(path=self.output_dir)
+            assert os.path.exists(tmp_run_settings)
+        else:
+            shutil.copy(
+                os.path.join(self.raw_run_folder, my_paths.run_settings),
+                tmp_run_settings,
+            )
         tmp_rs_name = os.path.splitext(tmp_run_settings)[0]
         root_macro_dir = os.path.join(my_paths.tb_analysis_dir, "SLBcommissioning")
         root_call = f'"test_read_masked_channels_summary.C(\\"{tmp_rs_name}\\")"'
@@ -478,14 +499,19 @@ class EcalMonitoring:
         self._time_last_raw_check = time.time()
         dat_pattern = os.path.join(self.raw_run_folder, "*.dat_[0-9][0-9][0-9][0-9]")
         dat_files = sorted(glob.glob(dat_pattern))
+        if len(dat_files) == 0:
+            dat_from_tar = glob.glob(dat_pattern + ".tar.gz")
+            dat_files.extend(sorted(map(without_tar, dat_from_tar)))
         path_start = dat_files[-1][:-4]
         new_largest_dat = int(dat_files[-1][-4:])
         for i in range(self._largest_raw_dat, new_largest_dat):
             path = path_start + f"{i:04}"
-            if os.path.exists(path):
+            if os.path.exists(as_tar(path)):
                 job_queue.put((Priority.CONVERSION, -i, path))
         self._largest_raw_dat = new_largest_dat
-        file_run_finished = os.path.join(self.raw_run_folder, "hitsHistogram.txt")
+        file_run_finished = as_tar(
+            os.path.join(self.raw_run_folder, "hitsHistogram.txt")
+        )
         self._run_finished = os.path.exists(file_run_finished)
         if self._run_finished:
             job_queue.put((Priority.CONVERSION, -new_largest_dat, dat_files[-1]))
@@ -537,17 +563,25 @@ class EcalMonitoring:
         )
 
     def convert_to_root(self, raw_file_path):
+        raw_file_name = os.path.basename(raw_file_path)
+        raw_file_path = as_tar(raw_file_path)
         if self._skip_dirty_dat:
             if os.path.getsize(raw_file_path) < 1024:
                 self.logger.debug("🦘Skip empty dat file: " + raw_file_path)
                 return False
-        raw_file_name = os.path.basename(raw_file_path)
         converted_name = "converted_" + raw_file_name + ".root"
         out_path = os.path.join(self.output_dir, my_paths.converted_dir, converted_name)
         if os.path.exists(out_path):
             return out_path
-        tmp_path = os.path.join(self.output_dir, my_paths.tmp_dir, converted_name)
-        in_path = os.path.join(self.output_dir, self.raw_run_folder, raw_file_name)
+        tmp_dir = os.path.join(self.output_dir, my_paths.tmp_dir)
+        tmp_path = os.path.join(tmp_dir, converted_name)
+        if raw_file_path.endswith(".tar.gz"):
+            with tarfile.open(raw_file_path) as tar:
+                tar.extractall(path=tmp_dir)
+            in_path = os.path.join(tmp_dir, raw_file_name)
+            assert os.path.exists(in_path)
+        else:
+            in_path = os.path.join(self.raw_run_folder, raw_file_name)
 
         root_macro_dir = os.path.join(my_paths.tb_analysis_dir, "converter_SLB")
         root_call = f'"ConvertDataSL.cc(\\"{in_path}\\", false, \\"{tmp_path}\\")"'
@@ -561,6 +595,8 @@ class EcalMonitoring:
             log_unexpected_error_subprocess(self.logger, ret, " during convert_to_root")
             sys.exit(1)
         os.rename(tmp_path, out_path)
+        if raw_file_path.endswith(".tar.gz"):
+            os.remove(in_path)
         self.logger.debug(
             f"🌱New converted file " f"{os.path.basename(out_path)} at {out_path}."
         )

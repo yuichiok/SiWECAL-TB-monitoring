@@ -11,12 +11,12 @@ void hitMaps(TString buildfile = "build.root",
   Int_t slab_max = ecal->GetMaximum("hit_slab");
   Int_t chip_min = ecal->GetMinimum("hit_chip");
   Int_t chip_max = ecal->GetMaximum("hit_chip");
-  ecal->Draw(
-      TString::Format(
-          "hit_slab:hit_chip >> hitMapSum(%i, %.1f, %.1f, %i, %.1f, %.1f)",
-          chip_max - chip_min + 1, chip_min - 0.5, chip_max + 0.5,
-          slab_max - slab_min + 1, slab_min - 0.5, slab_max + 0.5),
-      "", "goff");
+  ecal->Draw(TString::Format("hit_slab:hit_chip >> hitMapChipLevel(%i, %.1f, "
+                             "%.1f, %i, %.1f, %.1f)",
+                             chip_max - chip_min + 1, chip_min - 0.5,
+                             chip_max + 0.5, slab_max - slab_min + 1,
+                             slab_min - 0.5, slab_max + 0.5),
+             "", "goff");
   ecal->Draw(TString::Format("hit_slab*20+hit_chip:hit_chan >> hitMapLong(64, "
                              "-0.5, 63.5, %i, %.1f, %.1f)",
                              slab_max * 20 + chip_max + 1, -0.5,
