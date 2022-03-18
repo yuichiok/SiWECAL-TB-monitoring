@@ -256,6 +256,7 @@ class EcalMonitoring:
         configure_logging(self.logger, os.path.join(self.output_dir, my_paths.log_file))
         self.max_workers = int(get_with_fallback("monitoring", "max_workers", "10"))
         assert self.max_workers >= 1, self.max_workers
+        self._skip_dirty_dat = get_with_fallback("monitoring", "skip_dirty_dat", False)
 
         def ensure_calibration_exists(calib):
             file = os.path.abspath(config["eventbuilding"].get(calib))
@@ -438,11 +439,13 @@ class EcalMonitoring:
             print(priority_string(self._current_jobs), end="\r")
             if priority == Priority.CONVERSION:
                 converted_file = self.convert_to_root(in_file)
-                job_queue.put((Priority.EVENT_BUILDING, neg_id_dat, converted_file))
+                if converted_file:
+                    job_queue.put((Priority.EVENT_BUILDING, neg_id_dat, converted_file))
             elif priority == Priority.EVENT_BUILDING:
                 tmp_build = self.run_eventbuilding(in_file, -neg_id_dat)
-                job_queue.put((Priority.MERGE_EVENT_BUILDING, 0, "not used"))
-                queues["merge"].put(tmp_build)
+                if tmp_build:
+                    job_queue.put((Priority.MERGE_EVENT_BUILDING, 0, "not used"))
+                    queues["merge"].put(tmp_build)
             elif priority == Priority.MERGE_EVENT_BUILDING:
                 try:
                     self.merge_eventbuilding(queues)
@@ -522,7 +525,7 @@ class EcalMonitoring:
             return
 
         self.logger.info(
-            "⌛🤷Already waiting for new jobs since "
+            "💤🤷Already waiting for new jobs since "
             f"{int(time_without_jobs)} seconds. "
             "By now we would have expected to find the file that "
             f"indicates the end of the run: {file_run_finished}. "
@@ -534,6 +537,10 @@ class EcalMonitoring:
         )
 
     def convert_to_root(self, raw_file_path):
+        if self._skip_dirty_dat:
+            if os.path.getsize(raw_file_path) < 1024:
+                self.logger.debug("🦘Skip empty dat file: " + raw_file_path)
+                return False
         raw_file_name = os.path.basename(raw_file_path)
         converted_name = "converted_" + raw_file_name + ".root"
         out_path = os.path.join(self.output_dir, my_paths.converted_dir, converted_name)
@@ -560,6 +567,10 @@ class EcalMonitoring:
         return out_path
 
     def run_eventbuilding(self, converted_path, id_dat):
+        if self._skip_dirty_dat:
+            if os.path.getsize(converted_path) < 1024**2 * 3:
+                self.logger.debug("🦘Skip converted file too small: " + converted_path)
+                return False
         converted_name = os.path.basename(converted_path)
         build_name = converted_name.replace("converted_", "build_")
         out_path = os.path.join(self.output_dir, my_paths.build_dir, build_name)
