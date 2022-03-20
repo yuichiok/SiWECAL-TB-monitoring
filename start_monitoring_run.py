@@ -306,10 +306,12 @@ class EcalMonitoring:
         assert self.max_workers >= 1, self.max_workers
         self._skip_dirty_dat = config["monitoring"].getboolean("skip_dirty_dat", False)
 
+        ev_building = config["eventbuilding"]
+
         def ensure_calibration_exists(calib):
-            file = os.path.abspath(config["eventbuilding"].get(calib))
+            file = os.path.abspath(ev_building.get(calib))
             assert os.path.exists(file), file
-            config["eventbuilding"][calib] = file
+            ev_building[calib] = file
             return file
 
         self.eventbuilding_args = dict()
@@ -320,18 +322,16 @@ class EcalMonitoring:
             "mip_calibration_lg_file",
         ]:
             self.eventbuilding_args[calib] = ensure_calibration_exists(calib)
-        self.eventbuilding_args["w_config"] = config["eventbuilding"].getint("w_config")
-        self.eventbuilding_args["min_slabs_hit"] = config["eventbuilding"].getint(
-            "min_slabs_hit"
-        )
-        self.eventbuilding_args["cob_positions_string"] = config["eventbuilding"][
+        self.eventbuilding_args["w_config"] = ev_building.getint("w_config")
+        self.eventbuilding_args["min_slabs_hit"] = ev_building.getint("min_slabs_hit")
+        if ev_building.getboolean("no_zero_suppress"):
+            self.eventbuilding_args["no_zero_suppress"] = ""
+        self.eventbuilding_args["cob_positions_string"] = ev_building[
             "cob_positions_string"
         ]
-        if "id_run" not in config["eventbuilding"]:
-            config["eventbuilding"]["id_run"] = str(
-                guess_id_run(output_name, output_parent)
-            )
-        self.eventbuilding_args["id_run"] = config["eventbuilding"].getint("id_run")
+        if "id_run" not in ev_building:
+            ev_building["id_run"] = str(guess_id_run(output_name, output_parent))
+        self.eventbuilding_args["id_run"] = ev_building.getint("id_run")
 
         _s_after = config["snapshot"].get("after", "")
         try:
