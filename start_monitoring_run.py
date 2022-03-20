@@ -890,6 +890,7 @@ class EcalMonitoring:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description="Run the event-based monitoring loop from SiW-ECAL DAQ files.",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument("raw_run_folder", help="Folder of the run to be monitored.")
     parser.add_argument(

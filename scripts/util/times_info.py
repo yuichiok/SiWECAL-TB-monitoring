@@ -112,7 +112,7 @@ class TimingInfo:
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        description="Read some monitoring timing information  from times**.csv files.",
+        description="Read some monitoring timing information from times**.csv files.",
     )
     parser.add_argument(
         "-f",
