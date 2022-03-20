@@ -268,3 +268,4 @@ if __name__ == "__main__":
                 args.n_dat_entries,
                 cycle_id,
             )
+        open(os.path.join(dummy_run_dir, "hitsHistogram.txt"), "w").close()

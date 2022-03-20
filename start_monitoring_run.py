@@ -58,6 +58,15 @@ def without_tar(path):
     return path
 
 
+def get_now_string():
+    return datetime.datetime.now().strftime("%Y-%m-%d-%H%M%S")
+
+
+Timer = collections.namedtuple(
+    "Timer", ["job_type", "time", "timestamp", "id", "worker", "data_path"]
+)
+
+
 class Priority(enum.IntEnum):
     """For job scheduling. Lowest value is executed first."""
 
@@ -117,7 +126,7 @@ def cleanup_temporary(output_dir, logger):
         sys.exit(1)
 
     # Move run-level files to a timestamped version, so they can be recreated.
-    old_file_suffix = "_" + datetime.datetime.now().strftime("%Y-%m-%d-%H%M%S")
+    old_file_suffix = "_" + get_now_string()
     for existing_file in [
         my_paths.default_config,
         # my_paths.log,  # Comment this out for now: I prefer appending to the logfile.
@@ -152,7 +161,7 @@ def configure_logging(logger, log_file=None):
         file_handler.setFormatter(fmt=fmt)
         logger.addHandler(file_handler)
 
-    time_now = datetime.datetime.now().strftime("%Y-%m-%d-%H:%M:%S")
+    time_now = get_now_string()
     logger.info(f"🛫Logging to file {log_file} started at {time_now}.")
 
 
@@ -199,11 +208,35 @@ def guess_id_run(name, output_parent):
 
 class EcalMonitoring:
     def __init__(self, raw_run_folder, config_file):
+        setup_time = time.time()
         self.logger = logging.getLogger(self.__class__.__name__)
         self.raw_run_folder = self._validate_raw_run_folder(raw_run_folder)
         self._validate_computing_environment()
         self._read_config(config_file)
+        masking_time = time.time()
+        self.times = {
+            -1: [
+                Timer(
+                    job_type="SETUP",
+                    time=masking_time - setup_time,
+                    timestamp=get_now_string(),
+                    id=-1,
+                    worker=-1,
+                    data_path=self.output_dir,
+                )
+            ]
+        }
         self.masked_channels = self.create_masking()
+        self.times[-1].append(
+            Timer(
+                job_type="MASKING",
+                time=time.time() - masking_time,
+                timestamp=get_now_string(),
+                id=-1,
+                worker=-1,
+                data_path=self.output_dir,
+            )
+        )
 
     def _validate_raw_run_folder(self, raw_run_folder):
         # Removes potential trailing backslash.
@@ -359,12 +392,13 @@ class EcalMonitoring:
         return masked_channels
 
     def start_loop(self):
+        start_loop_time = time.time()
         self._largest_raw_dat = 0
         self._last_n_monitored = 0
         self._snapshot_needs_current_build = False
         self._run_finished = False
         self._time_last_raw_check = 0
-        self._datetime_last_snapshot = datetime.datetime.now()
+        self._time_last_snapshot = time.time()
         self._time_last_job = time.time()
         self._current_jobs = [Priority.IDLE for _ in range(self.max_workers)]
         queues = {}
@@ -380,9 +414,30 @@ class EcalMonitoring:
                 futures.append(executor.submit(self.find_and_do_job, *job_args))
                 time.sleep(1)  # Head start for the startup bookkeeping.
             self._debug_future_returns(futures, queues)
+        wrap_up_time = time.time()
+        self.times[-1].append(
+            Timer(
+                job_type="LOOP",
+                time=wrap_up_time - start_loop_time,
+                timestamp=get_now_string(),
+                id=-1,
+                worker=-1,
+                data_path=self.output_dir,
+            )
+        )
         self._wrap_up(queues)
         self.logger.info(
             "🛬The run has finished. The monitoring has treated all files. "
+        )
+        self.times[-1].append(
+            Timer(
+                job_type="WRAP_UP",
+                time=time.time() - wrap_up_time,
+                timestamp=get_now_string(),
+                id=-1,
+                worker=-1,
+                data_path=self.output_dir,
+            )
         )
 
     def _debug_future_returns(self, futures, queues):
@@ -431,9 +486,13 @@ class EcalMonitoring:
         assert n_converted == n_build, f"{n_converted} != {n_build}"
 
     def find_and_do_job(self, queues, i_worker=0):
+        self.times[i_worker] = []
         threading.current_thread().name = f"👷{i_worker:02}"
         job_queue = queues["job"]
+        total_time_look_for_jobs = 0
+        total_time_idle = 0
         while True:
+            time_look_for_jobs = time.time()
             self._look_for_snapshot_request(job_queue)
             # The try is not technically thread safe, but good enough here.
             try:
@@ -451,27 +510,51 @@ class EcalMonitoring:
                             "🤝Graceful stopping granted before end of monitoring. "
                             f"This was requested by {file_stop_gracefully}."
                         )
+                self.times[i_worker].append(
+                    Timer(
+                        job_type="LOOK_FOR_JOB",
+                        time=total_time_look_for_jobs,
+                        timestamp=get_now_string(),
+                        id=-1,
+                        worker=i_worker,
+                        data_path=self.output_dir,
+                    )
+                )
+                self.times[i_worker].append(
+                    Timer(
+                        job_type=Priority.IDLE.name,
+                        time=total_time_idle,
+                        timestamp=get_now_string(),
+                        id=-1,
+                        worker=i_worker,
+                        data_path=self.output_dir,
+                    )
+                )
                 return
             try:
                 priority, neg_id_dat, in_file = job_queue.get(timeout=2)
             except queue.Empty:
                 self._current_jobs[i_worker] = Priority.IDLE
                 continue
+            time_do_job = time.time()
+            total_time_look_for_jobs += time_do_job - time_look_for_jobs
+
             self._current_jobs[i_worker] = priority
             print(priority_string(self._current_jobs), end="\r")
             if priority == Priority.CONVERSION:
-                converted_file = self.convert_to_root(in_file)
-                if converted_file:
-                    job_queue.put((Priority.EVENT_BUILDING, neg_id_dat, converted_file))
+                res_file = self.convert_to_root(in_file)
+                if res_file:
+                    job_queue.put((Priority.EVENT_BUILDING, neg_id_dat, res_file))
             elif priority == Priority.EVENT_BUILDING:
-                tmp_build = self.run_eventbuilding(in_file, -neg_id_dat)
-                if tmp_build:
+                res_file = self.run_eventbuilding(in_file, -neg_id_dat)
+                if res_file:
                     job_queue.put((Priority.MERGE_EVENT_BUILDING, 0, "not used"))
-                    queues["merge"].put(tmp_build)
+                    queues["merge"].put(res_file)
             elif priority == Priority.MERGE_EVENT_BUILDING:
                 try:
                     self.merge_eventbuilding(queues)
                     self._look_for_snapshot_request(job_queue, check_scheduled=True)
+                    res_file = True
                 except queue.Empty:
                     # Purpose of this loop: Have only one worker at a time
                     # waiting for the chance to merge build files.
@@ -482,12 +565,26 @@ class EcalMonitoring:
                             break
                     else:
                         job_queue.put((Priority.MERGE_EVENT_BUILDING, 0, "not used"))
+                    res_file = False
             elif priority == Priority.SNAP_SHOT:
-                self.get_snapshot(queues["current_build"])
+                res_file = self.get_snapshot(queues["current_build"])
             else:
                 raise NotImplementedError(priority)
             job_queue.task_done()
             self._time_last_job = time.time()
+            if res_file:
+                self.times[i_worker].append(
+                    Timer(
+                        job_type=priority.name,
+                        time=self._time_last_job - time_do_job,
+                        timestamp=get_now_string(),
+                        id=-neg_id_dat,
+                        worker=i_worker,
+                        data_path=self.output_dir,
+                    )
+                )
+            else:
+                total_time_idle += self._time_last_job - time_do_job
 
     def _look_for_new_raw(self, job_queue):
         if self._run_finished:
@@ -686,13 +783,13 @@ class EcalMonitoring:
         snap_path=None,
         force_snapshot=False,
     ):
-        now = datetime.datetime.now()
-        if (now - self._datetime_last_snapshot).seconds < 30 and not force_snapshot:
+        now = time.time()
+        if now - self._time_last_snapshot < 30 and not force_snapshot:
             return False
         else:
-            self._datetime_last_snapshot = now
+            self._time_last_snapshot = now
         if snap_path is None:
-            snap_name = now.strftime("%Y-%m-%d-%H%M%S") + ".root"
+            snap_name = get_now_string() + ".root"
             snap_path = os.path.join(self.output_dir, my_paths.snapshot_dir, snap_name)
         else:
             snap_name = os.path.basename(snap_path)
@@ -721,8 +818,10 @@ class EcalMonitoring:
                 build_file,
                 tmp_snap_path,
             )
+        deco_times_file = "times_decorate.py.csv"
+        deco_times_file = os.path.join(self.output_dir, ".times", deco_times_file)
         ret = subprocess.run(
-            f"./decorate.py {tmp_snap_path}",
+            f"./decorate.py {tmp_snap_path} --times_file {deco_times_file}",
             shell=True,
             capture_output=True,
             cwd=os.path.dirname(os.path.abspath(__file__)),
@@ -766,6 +865,27 @@ class EcalMonitoring:
             current_build_queue.put(build_file)
             current_build_queue.task_done()
 
+    def write_times(self, file_name=None):
+        if file_name is None:
+            times_dir = os.path.join(self.output_dir, ".times")
+            if not os.path.isdir(times_dir):
+                os.mkdir(times_dir)
+            file_name = f"times_{os.path.basename(os.path.abspath(__file__))}.csv"
+            file_name = os.path.join(times_dir, file_name)
+        lines = [",".join(self.times[-1][0]._fields)]
+        for t in [v for per_worker in self.times.values() for v in per_worker]:
+            lines.append(
+                f"{t.job_type},{t.time:.3f},{t.timestamp}"
+                f",{t.id},{t.worker},{t.data_path}"
+            )
+        if os.path.exists(file_name):
+            with open(file_name) as f:
+                read_lines = f.readlines()
+                if len(read_lines) and (read_lines[0] == lines[0] + "\n"):
+                    lines = lines[1:]
+        with open(file_name, "a") as f:
+            f.write("\n".join(lines) + "\n")
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
@@ -780,3 +900,4 @@ if __name__ == "__main__":
     )
     monitoring = EcalMonitoring(**vars(parser.parse_args()))
     monitoring.start_loop()
+    monitoring.write_times()

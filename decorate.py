@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 import argparse
+import collections
+import datetime
 import logging
 import os
 import subprocess
@@ -23,6 +25,11 @@ def add_suffix_before_extension(path, suffix, extension=".root"):
     return (suffix + extension).join(path.rsplit(extension, 1))
 
 
+Timer = collections.namedtuple(
+    "Timer", ["job_type", "time", "timestamp", "id", "worker", "data_path"]
+)
+
+
 class MonitoringPlugins:
     _plugins_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "plugins")
 
@@ -35,7 +42,7 @@ class MonitoringPlugins:
         else:
             self.logger = logger
         self._plugins = None
-        self.times = {}
+        self.times = []
 
     def _validate_plugins(self, new_plugins=None):
         """Currently does nothing."""
@@ -71,7 +78,6 @@ class MonitoringPlugins:
         if input_file is not None:
             self.input_file = os.path.abspath(input_file)
         for plugin_level, plugins_per_level in self.plugins.items():
-            self.times[plugin_level] = self.times.get(plugin_level, {})
             for name, plugin_path in plugins_per_level.items():
                 start_time = time.time()
                 self.logger.debug(
@@ -80,9 +86,16 @@ class MonitoringPlugins:
                     f"({plugin_path} on {self.input_file})."
                 )
                 self.shoot_by_name(plugin_path)
-                plugin_time = time.time() - start_time
-                plugin_time += self.times[plugin_level].get(name, 0)
-                self.times[plugin_level][name] = plugin_time
+                self.times.append(
+                    Timer(
+                        job_type=name,
+                        time=time.time() - start_time,
+                        timestamp=datetime.datetime.now().strftime("%Y-%m-%d-%H%M%S"),
+                        id=plugin_level,
+                        worker=-1,
+                        data_path=self.input_file,
+                    )
+                )
 
     def shoot_by_name(self, plugin_path, input_file=None):
         if input_file is not None:
@@ -124,6 +137,27 @@ class MonitoringPlugins:
                     self.logger, ret, f" during {plugin_path} rootmv"
                 )
 
+    def write_times(self, file_name=None):
+        if file_name is None:
+            times_dir = os.path.join(os.path.dirname(self.input_file), ".times")
+            if not os.path.isdir(times_dir):
+                os.mkdir(times_dir)
+            file_name = f"times_{os.path.basename(os.path.abspath(__file__))}.csv"
+            file_name = os.path.join(times_dir, file_name)
+        lines = [",".join(self.times[0]._fields)]
+        for t in self.times:
+            lines.append(
+                f"{t.job_type},{t.time:.3f},{t.timestamp}"
+                f",{t.id},{t.worker},{t.data_path}"
+            )
+        if os.path.exists(file_name):
+            with open(file_name) as f:
+                read_lines = f.readlines()
+                if len(read_lines) and (read_lines[0] == lines[0] + "\n"):
+                    lines = lines[1:]
+        with open(file_name, "a") as f:
+            f.write("\n".join(lines) + "\n")
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
@@ -131,12 +165,15 @@ if __name__ == "__main__":
     )
     parser.add_argument("input_file")
     parser.add_argument("--verbose", action="store_true")
+    parser.add_argument("--times_file", default=None)
     args = parser.parse_args()
     mps = MonitoringPlugins(args.input_file, verbose=args.verbose)
     mps.shoot()
+    if args.times_file is not None:
+        if not os.path.isdir(os.path.dirname(args.times_file)):
+            os.mkdir(os.path.dirname(args.times_file))
+        mps.write_times(args.times_file)
     if args.verbose:
         print("Execution time per plugin")
-        for ex_time, plugin_type, name in sorted(
-            (t, p, n) for p, nt in mps.times.items() for n, t in nt.items()
-        ):
-            print(f"{ex_time:6.2f}s: {name} (per {plugin_type})")
+        for _, t in sorted((-t.time, t) for t in mps.times):
+            print(f"{t.time:6.2f}s: {t.job_type} (per {t.id})")
