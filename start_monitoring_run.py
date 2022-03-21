@@ -146,7 +146,7 @@ def cleanup_temporary(output_dir, logger):
 
 def configure_logging(logger, log_file=None):
     """TODO: Nicer formatting. Maybe different for console and file."""
-    logger.setLevel("DEBUG")
+    logger.setLevel(logging.DEBUG)
     # FORMAT = "%(asctime)s[%(levelname)-5.5s:%(name)s %(threadName)s] %(message)s"
     FORMAT = "[%(levelname)-5.5s%(threadName)s🕙%(asctime)s] %(message)s"
     fmt = logging.Formatter(FORMAT, datefmt="%H:%M:%S")
