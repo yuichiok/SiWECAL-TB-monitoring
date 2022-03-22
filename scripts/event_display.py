@@ -17,10 +17,11 @@ class EventDisplay:
     _n_layers = 15
     _layer_distance = 15
     _pos_xy = np.arange(3.8, 87, 5.5)
+    _pos_x_fev13 = np.arange(3.8, 87 + 60, 5.5)
     _w_xy = 2.23  # 1/2 length per side of the drawn square.
 
     _z_1D = np.arange(0, _n_layers * _layer_distance + 2)
-    _x_1D = np.concatenate([-_pos_xy[::-1], _pos_xy])
+    _x_1D = np.concatenate([-_pos_x_fev13[::-1], _pos_xy])
     _y_1D = np.concatenate([-_pos_xy[::-1], _pos_xy])
 
     _xaxis = dict(
@@ -68,18 +69,6 @@ class EventDisplay:
             x = getattr(self.ecal, self._hover_var)
             self._hover_lim = (ak.min(x), ak.max(x))
 
-    def _get_event_display(self, title, hist):
-        pos_z, pos_x, pos_y = np.meshgrid(
-            self._z_1D, self._x_1D, self._y_1D, indexing="ij"
-        )
-        hit_mask = hist.values() != 0
-        energies = hist.values()[hit_mask]
-        xs = pos_x[hit_mask]
-        ys = pos_y[hit_mask]
-        zs = pos_z[hit_mask]
-        fig = self.get_figure(energies, xs, ys, zs, title=title)
-        return fig
-
     def get_figure(self, energies, xs, ys, zs, title="title"):
         txt = self._hover_var + ": %{customdata[0]:d}"
         txt += "<br>layer %{customdata[1]:d} (%{y:.1f},%{z:.1f})<extra></extra>"
@@ -122,7 +111,7 @@ class EventDisplay:
             mask = mask & ak.sum(ecal.hit_slab == int(layer_required), axis=1) > 0
             self.logger.debug(f" - With hits in layer {layer_required}: {ak.sum(mask)}")
         if args.max_hits > 0:
-            mask = mask & ak.sum(ecal.hit_isHit, axis=1) <= args.max_hits
+            mask = mask & (ak.sum(ecal.hit_isHit, axis=1) <= args.max_hits)
             self.logger.debug(f" - With at most {args.max_hits} hits: {ak.sum(mask)}")
         return mask
 

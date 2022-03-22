@@ -326,9 +326,7 @@ class EcalMonitoring:
         self.eventbuilding_args["min_slabs_hit"] = ev_building.getint("min_slabs_hit")
         if ev_building.getboolean("no_zero_suppress"):
             self.eventbuilding_args["no_zero_suppress"] = ""
-        self.eventbuilding_args["cob_positions_string"] = ev_building[
-            "cob_positions_string"
-        ]
+        self.eventbuilding_args["asu_version"] = ev_building["asu_version"]
         if "id_run" not in ev_building:
             ev_building["id_run"] = str(guess_id_run(output_name, output_parent))
         self.eventbuilding_args["id_run"] = ev_building.getint("id_run")
