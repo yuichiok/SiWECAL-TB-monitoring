@@ -600,23 +600,42 @@ class EcalMonitoring:
         if len(dat_files) == 0:
             dat_from_tar = glob.glob(dat_pattern + ".tar.gz")
             dat_files.extend(sorted(map(without_tar, dat_from_tar)))
-        path_start = dat_files[-1][:-4]
-        new_largest_dat = int(dat_files[-1][-4:])
-        for i in range(self._largest_raw_dat, new_largest_dat):
-            path = path_start + f"{i:04}"
-            if os.path.exists(as_tar(path)):
-                job_queue.put((Priority.CONVERSION, -i, path))
-        self._largest_raw_dat = new_largest_dat
+        if len(dat_files) != 0:
+            path_start = dat_files[-1][:-4]
+            new_largest_dat = int(dat_files[-1][-4:])
+            for i in range(self._largest_raw_dat, new_largest_dat):
+                path = path_start + f"{i:04}"
+                if os.path.exists(as_tar(path)):
+                    job_queue.put((Priority.CONVERSION, -i, path))
+            self._largest_raw_dat = new_largest_dat
+            self._special_case_0000(job_queue)
         file_run_finished = as_tar(
             os.path.join(self.raw_run_folder, "hitsHistogram.txt")
         )
         self._run_finished = os.path.exists(file_run_finished)
         if self._run_finished:
-            job_queue.put((Priority.CONVERSION, -new_largest_dat, dat_files[-1]))
+            if len(dat_files) > 0:
+                job_queue.put((Priority.CONVERSION, -new_largest_dat, dat_files[-1]))
+            else:
+                self._special_case_0000(job_queue)
             self.logger.info(
                 "🏃The run has finished. " "Monitoring will try to catch up now."
             )
         self._alert_is_idle(file_run_finished)
+
+    def _special_case_0000(self, job_queue):
+        first_dat_pattern = os.path.join(self.raw_run_folder, "*.dat")
+        first_dat_glob = list(glob.glob(first_dat_pattern))
+        if len(first_dat_glob) == 0:
+            return False
+        elif len(first_dat_glob) == 1:
+            path = first_dat_glob[0]
+            if os.path.exists(as_tar(path)):
+                job_queue.put((Priority.CONVERSION, 0, path))
+                return True
+        else:
+            raise NotImplementedError(first_dat_glob)
+        return False
 
     def _look_for_snapshot_request(self, job_queue, check_scheduled=False):
         schedule_snapshot = False
@@ -668,7 +687,10 @@ class EcalMonitoring:
             if os.path.getsize(raw_file_path) < 1024:
                 self.logger.debug("🦘Skip empty dat file: " + raw_file_path)
                 return False
-        converted_name = "converted_" + raw_file_name + ".root"
+        if raw_file_name.endswith(".dat"):
+            converted_name = "converted_" + raw_file_name + "_0000.root"
+        else:
+            converted_name = "converted_" + raw_file_name + ".root"
         out_path = os.path.join(self.output_dir, my_paths.converted_dir, converted_name)
         if os.path.exists(out_path):
             return out_path
