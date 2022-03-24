@@ -17,19 +17,19 @@ void nSCAsFilled(TTree *ecal) {
                              "%.1f, %i, %.1f, %.1f)",
                              nscas, 0.5, nscas + 0.5, slab_max - slab_min + 1,
                              slab_min - 0.5, slab_max + 0.5),
-             "", "goff");
+             "(hit_isHit == 1)", "goff");
 
   ecal->Draw(TString::Format("hit_slab*20+hit_chip:hit_n_scas_filled >> "
                              "perChip(%i, %.1f, %.1f, %i, %.1f, %.1f)",
                              nscas, 0.5, nscas + 0.5,
                              slab_max * 20 + chip_max + 1, -0.5,
                              slab_max * 20 + chip_max + 0.5),
-             "", "goff");
+             "(hit_isHit == 1)", "goff");
 
   ecal->Draw(TString::Format("hit_chan:hit_n_scas_filled >> perChannel(%i, "
                              "%.1f, %.1f, 64, -0.5, 63.5)",
                              nscas, 0.5, nscas + 0.5),
-             "", "goff");
+             "(hit_isHit == 1)", "goff");
 }
 
 void whichSCA(TTree *ecal) {
@@ -44,19 +44,19 @@ void whichSCA(TTree *ecal) {
                              sca_max + 1, -0.5, sca_max + 0.5,
                              nhit_slab_max - nhit_slab_min + 1,
                              nhit_slab_min - 0.5, nhit_slab_max + 0.5),
-             "", "goff");
+             "(hit_isHit == 1)", "goff");
   ecal->Draw(
       TString::Format(
           "hit_slab:hit_sca >> sca_perLayer(%i, %.1f, %.1f, %i, %.1f, %.1f)",
           sca_max + 1, -0.5, sca_max + 0.5, slab_max - slab_min + 1,
           slab_min - 0.5, slab_max + 0.5),
-      "", "goff");
+      "(hit_isHit == 1)", "goff");
   ecal->Draw(TString::Format("hit_slab*20+hit_chip:hit_sca >> sca_perChip(%i, "
                              "%.1f, %.1f, %i, %.1f, %.1f)",
                              sca_max + 1, -0.5, sca_max + 0.5,
                              slab_max * 20 + chip_max + 1, -0.5,
                              slab_max * 20 + chip_max + 0.5),
-             "", "goff");
+             "(hit_isHit == 1)", "goff");
 }
 
 void beforeAnyFullSCA(TTree *ecal) {

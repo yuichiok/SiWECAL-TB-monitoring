@@ -10,8 +10,8 @@ void hitMapsXY(TString buildfile = "build.root",
   // 88 = 5.5 * 16. The small gap in the center is not visualized here.
   // -148.5 = 88 - 60.5. FEV13 has shifted position in x (60mm).
   // 60.5 = 11 * 5.5 to match cells in y.
-  ecal->Draw("hit_y:hit_x >> hitMapXYSum(43, -148.5, 88, 32, -88, 88)", "",
-             "goff");
+  ecal->Draw("hit_y:hit_x >> hitMapXYSum(43, -148.5, 88, 32, -88, 88)",
+             "(hit_isHit == 1)", "goff");
   Int_t slab_max = ecal->GetMaximum("hit_slab");
   for (Int_t i_slab = ecal->GetMinimum("hit_slab"); i_slab <= slab_max;
        i_slab++) {
@@ -19,7 +19,8 @@ void hitMapsXY(TString buildfile = "build.root",
         TString::Format(
             "hit_y:hit_x >> hitMapXY_layer%02i(43, -148.5, 88, 32, -88, 88)",
             i_slab),
-        TString::Format("hit_slab == %i", i_slab), "goff");
+        TString::Format("(hit_slab == %i) && (hit_isHit == 1)", i_slab),
+        "goff");
   }
   file->Write();
   file->Close();

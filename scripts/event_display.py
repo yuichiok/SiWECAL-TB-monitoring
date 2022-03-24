@@ -127,12 +127,13 @@ class EventDisplay:
             return False
         ev = self.ecal[i_event]
         x = getattr(ev, self._hover_var)
+        m = ev.hit_isHit == 1
         title = (
             f"Event display {args.file_tag}_{i_event} "
             f"#Hits={len(x)} "
-            f"#Coincidences={len(np.unique(np.array(ev.hit_slab)))}"
+            f"#Coincidences={len(np.unique(np.array(ev.hit_slab[m])))}"
         )
-        fig = self.get_figure(x, ev.hit_x, ev.hit_y, ev.hit_z, title)
+        fig = self.get_figure(x[m], ev.hit_x[m], ev.hit_y[m], ev.hit_z[m], title)
         fig.write_html(save_to)
         self.logger.debug(f"New event: {i_event} at file://" + save_to)
         return save_to
