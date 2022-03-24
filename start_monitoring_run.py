@@ -117,7 +117,6 @@ def cleanup_temporary(output_dir, logger):
         logger.error(
             "⛔Aborted. A previous run should have left behind "
             f"a logfile at {output_conf}. "
-            # f"a config file at {output_conf}. "
             "As no such file was found, it is assumed that you specified "
             "the wrong directory. "
             "To nevertheless use this output directory it suffices to"
@@ -622,14 +621,25 @@ class EcalMonitoring:
         self._alert_is_idle(file_run_finished)
 
     def _special_case_0000(self, job_queue):
+        if hasattr(self, "_already_done_0000"):
+            return False
         first_dat_pattern = os.path.join(self.raw_run_folder, "*.dat")
         first_dat_glob = list(glob.glob(first_dat_pattern))
         if len(first_dat_glob) == 0:
             return False
         elif len(first_dat_glob) == 1:
-            path = first_dat_glob[0]
-            if os.path.exists(as_tar(path)):
-                job_queue.put((Priority.CONVERSION, 0, path))
+            raw_file_path = first_dat_glob[0]
+            raw_file_name = os.path.basename(raw_file_path)
+            converted_name = "converted_" + raw_file_name + "_0000.root"
+            converted_dir = os.path.join(self.output_dir, my_paths.converted_dir)
+            tmp_dir = os.path.join(self.output_dir, my_paths.tmp_dir)
+            if os.path.exists(os.path.join(converted_dir, converted_name)):
+                return False
+            if os.path.exists(os.path.join(tmp_dir, converted_name)):
+                return False
+            elif os.path.exists(as_tar(raw_file_path)):
+                self._already_done_0000 = True
+                job_queue.put((Priority.CONVERSION, 0, raw_file_path))
                 return True
         else:
             raise NotImplementedError(first_dat_glob)
