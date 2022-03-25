@@ -105,6 +105,14 @@ def create_directory_structure(run_output_dir):
 
 
 def cleanup_temporary(output_dir, logger):
+    full_run_path = os.path.join(output_dir, "full_run.root")
+    if os.path.exists(full_run_path):
+        logger.warning(f"✅Run was already monitored. Check: {full_run_path}")
+        sys.exit(0)
+    no_monitoring = os.path.join(output_dir, "no_monitoring")
+    if os.path.exists(no_monitoring):
+        logger.warning(f"❌This run should not be monitored: {no_monitoring}")
+        sys.exit(0)
     logger.warning(
         f"🧹The output directory {output_dir} already exists. "
         "This is ok and expected if you had already started (and aborted) "
@@ -304,6 +312,7 @@ class EcalMonitoring:
         self.max_workers = int(get_with_fallback("monitoring", "max_workers", "10"))
         assert self.max_workers >= 1, self.max_workers
         self._skip_dirty_dat = config["monitoring"].getboolean("skip_dirty_dat", False)
+        self._binary_split_M = config["monitoring"].getint("binary_split_M", -1)
 
         ev_building = config["eventbuilding"]
 
@@ -539,7 +548,7 @@ class EcalMonitoring:
             self._current_jobs[i_worker] = priority
             print(priority_string(self._current_jobs), end="\r")
             if priority == Priority.CONVERSION:
-                res_file = self.convert_to_root(in_file)
+                res_file = self.convert_to_root(in_file, job_queue)
                 if res_file:
                     job_queue.put((Priority.EVENT_BUILDING, neg_id_dat, res_file))
             elif priority == Priority.EVENT_BUILDING:
@@ -605,25 +614,50 @@ class EcalMonitoring:
                 if os.path.exists(as_tar(path)):
                     job_queue.put((Priority.CONVERSION, -i, path))
             self._largest_raw_dat = new_largest_dat
-            self._special_case_0000(job_queue)
+            self._special_case_0000(job_queue, ".dat")
         file_run_finished = as_tar(
             os.path.join(self.raw_run_folder, "hitsHistogram.txt")
         )
         self._run_finished = os.path.exists(file_run_finished)
+        self._check_for_binary(dat_files, job_queue)
         if self._run_finished:
             if len(dat_files) > 0:
                 job_queue.put((Priority.CONVERSION, -new_largest_dat, dat_files[-1]))
             else:
-                self._special_case_0000(job_queue)
+                self._special_case_0000(job_queue, ".dat")
+                self._special_case_0000(job_queue, "_raw.bin")
             self.logger.info(
                 "🏃The run has finished. " "Monitoring will try to catch up now."
             )
         self._alert_is_idle(file_run_finished)
 
-    def _special_case_0000(self, job_queue):
+    def _check_for_binary(self, dat_files, job_queue):
+        bin_ext = "_raw.bin"
+        bin_pattern = "*" + bin_ext + "*_[0-9][0-9][0-9][0-9]"
+        bin_pattern = os.path.join(self.raw_run_folder, bin_pattern)
+        binary_parts = sorted(glob.glob(bin_pattern))
+        if len(binary_parts) == 0:
+            binary_from_tar = glob.glob(bin_pattern + ".tar.gz")
+            binary_parts.extend(sorted(map(without_tar, binary_from_tar)))
+        if len(dat_files) > 0 and len(binary_parts) > 0:
+            self.logger.error(
+                "⛔ Cannnot have both ascii data and raw_bin data in same run! "
+                f"{dat_files} {binary_parts}"
+            )
+        if len(binary_parts) > 0:
+            path_start = binary_parts[-1][:-4]
+            new_largest_dat = int(binary_parts[-1][-4:])
+            for i in range(self._largest_raw_dat, new_largest_dat):
+                path = path_start + f"{i:04}"
+                if os.path.exists(as_tar(path)):
+                    job_queue.put((Priority.CONVERSION, -i, path))
+            self._largest_raw_dat = new_largest_dat
+            self._special_case_0000(job_queue, bin_ext)
+
+    def _special_case_0000(self, job_queue, pattern=".dat"):
         if hasattr(self, "_already_done_0000"):
             return False
-        first_dat_pattern = os.path.join(self.raw_run_folder, "*.dat")
+        first_dat_pattern = os.path.join(self.raw_run_folder, "*" + pattern)
         first_dat_glob = list(glob.glob(first_dat_pattern))
         if len(first_dat_glob) == 0:
             return False
@@ -688,14 +722,14 @@ class EcalMonitoring:
             f"To suppress this info, create the file {file_suppress_idle_info}. "
         )
 
-    def convert_to_root(self, raw_file_path):
+    def convert_to_root(self, raw_file_path, job_queue):
         raw_file_name = os.path.basename(raw_file_path)
         raw_file_path = as_tar(raw_file_path)
         if self._skip_dirty_dat:
             if os.path.getsize(raw_file_path) < 1024:
                 self.logger.debug("🦘Skip empty dat file: " + raw_file_path)
                 return False
-        if raw_file_name.endswith(".dat"):
+        if raw_file_name.endswith(".dat") or raw_file_name.endswith("raw.bin"):
             converted_name = "converted_" + raw_file_name + "_0000.root"
         else:
             converted_name = "converted_" + raw_file_name + ".root"
@@ -710,10 +744,19 @@ class EcalMonitoring:
             in_path = os.path.join(tmp_dir, raw_file_name)
             assert os.path.exists(in_path)
         else:
-            in_path = os.path.join(self.raw_run_folder, raw_file_name)
+            in_path = raw_file_path
 
         root_macro_dir = os.path.join(my_paths.tb_analysis_dir, "converter_SLB")
-        root_call = f'"ConvertDataSL.cc(\\"{in_path}\\", false, \\"{tmp_path}\\")"'
+        if "_raw.bin" in raw_file_name:
+            root_call = (
+                f'"RawConvertDataSL.cc(\\"{in_path}\\", false, \\"{tmp_path}\\")"'
+            )
+            if self._split_binary_too_large(in_path, job_queue):
+                return False
+        elif ".dat" in raw_file_name:
+            root_call = f'"ConvertDataSL.cc(\\"{in_path}\\", false, \\"{tmp_path}\\")"'
+        else:
+            raise NotImplementedError(raw_file_name)
         ret = subprocess.run(
             "root -b -l -q " + root_call,
             shell=True,
@@ -726,10 +769,43 @@ class EcalMonitoring:
         os.rename(tmp_path, out_path)
         if raw_file_path.endswith(".tar.gz"):
             os.remove(in_path)
+        elif "_monitoring_split_" in os.path.basename(in_path):
+            os.remove(in_path)
         self.logger.debug(
-            f"🌱New converted file " f"{os.path.basename(out_path)} at {out_path}."
+            f"🌱New converted file {os.path.basename(out_path)} at {out_path}."
         )
         return out_path
+
+    def _split_binary_too_large(self, binary_path, job_queue):
+        try:
+            binary_id = int(binary_path[-4:]) + 1
+        except ValueError:
+            binary_id = 1
+        if self._binary_split_M <= 0:
+            return False
+        if os.path.getsize(binary_path) > 1024**2 * self._binary_split_M:
+            tmp_dir = os.path.join(self.output_dir, my_paths.tmp_dir)
+            part_prefix_name = os.path.basename(binary_path) + "_monitoring_split_"
+            part_prefix = os.path.join(tmp_dir, part_prefix_name)
+            cmd = f"split {binary_path} {part_prefix} "
+            cmd += f"-b {self._binary_split_M}M "
+            cmd += "--suffix-length 5 --numeric "
+            ret = subprocess.run(
+                cmd,
+                shell=True,
+                capture_output=True,
+            )
+            if ret.returncode != 0 or ret.stderr != b"":
+                log_unexpected_error_subprocess(
+                    self.logger, ret, " during _split_binary_too_large"
+                )
+                sys.exit(1)
+            for i, binary_part in enumerate(sorted(glob.glob(part_prefix + "*"))):
+                binary_part_path = os.path.join(tmp_dir, binary_part)
+                id_job = 10000 * binary_id + i
+                job_queue.put((Priority.CONVERSION, -id_job, binary_part_path))
+            return True
+        return False
 
     def run_eventbuilding(self, converted_path, id_dat):
         if self._skip_dirty_dat:
