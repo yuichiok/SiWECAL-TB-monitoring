@@ -393,7 +393,7 @@ class EcalMonitoring:
             masked_channels,
         )
         os.remove(tmp_run_settings)
-        self.logger.debug(f"👏Channel masks written to {masked_channels}.")
+        self.logger.debug(f"👏Channel masks written to {masked_channels}")
         self.eventbuilding_args["masked_file"] = masked_channels
         return masked_channels
 
@@ -514,7 +514,7 @@ class EcalMonitoring:
                         self._stopped_gracefully = True
                         self.logger.info(
                             "🤝Graceful stopping granted before end of monitoring. "
-                            f"This was requested by {file_stop_gracefully}."
+                            f"This was requested by {file_stop_gracefully}"
                         )
                 self.times[i_worker].append(
                     Timer(
@@ -714,12 +714,12 @@ class EcalMonitoring:
             "💤🤷Already waiting for new jobs since "
             f"{int(time_without_jobs)} seconds. "
             "By now we would have expected to find the file that "
-            f"indicates the end of the run: {file_run_finished}. "
+            f"indicates the end of the run: {file_run_finished} "
         )
         self.logger.info(
             "💡Hint: To exit this infinite loop gracefully, and perform "
             "the end-of run computations, create a dummy version of that file. "
-            f"To suppress this info, create the file {file_suppress_idle_info}. "
+            f"To suppress this info, create the file {file_suppress_idle_info} "
         )
 
     def convert_to_root(self, raw_file_path, job_queue):
@@ -772,7 +772,7 @@ class EcalMonitoring:
         elif "_monitoring_split_" in os.path.basename(in_path):
             os.remove(in_path)
         self.logger.debug(
-            f"🌱New converted file {os.path.basename(out_path)} at {out_path}."
+            f"🌱New converted file {os.path.basename(out_path)} at {out_path}"
         )
         return out_path
 
@@ -879,7 +879,7 @@ class EcalMonitoring:
                 sys.exit(1)
         os.rename(tmp_path, part_path)
         self.logger.debug(
-            f"🔨New event file " f"{os.path.basename(part_path)} at {part_path}."
+            f"🔨New event file " f"{os.path.basename(part_path)} at {part_path}"
         )
 
     def get_snapshot(
@@ -945,7 +945,7 @@ class EcalMonitoring:
                 if f.startswith("202") and os.path.isfile(f_path):
                     os.remove(f_path)
         self.logger.debug(
-            f"🔎A new monitoring snapshot is ready: {snap_name} at {snap_path}."
+            f"🔎A new monitoring snapshot is ready: {snap_name} at {snap_path}"
         )
         return snap_path
 
