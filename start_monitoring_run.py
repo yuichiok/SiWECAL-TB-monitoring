@@ -104,15 +104,16 @@ def create_directory_structure(run_output_dir):
             os.mkdir(sub_path)
 
 
-def cleanup_temporary(output_dir, logger):
+def cleanup_temporary(output_dir, logger, input_dir):
     full_run_path = os.path.join(output_dir, "full_run.root")
     if os.path.exists(full_run_path):
         logger.warning(f"✅Run was already monitored. Check: {full_run_path}")
         sys.exit(0)
-    no_monitoring = os.path.join(output_dir, "no_monitoring")
-    if os.path.exists(no_monitoring):
-        logger.warning(f"❌This run should not be monitored: {no_monitoring}")
-        sys.exit(0)
+    for no_monitoring_dir in [input_dir, output_dir]:
+        no_monitoring = os.path.join(no_monitoring_dir, "no_monitoring")
+        if os.path.exists(no_monitoring):
+            logger.warning(f"❌This run should not be monitored: {no_monitoring}")
+            sys.exit(0)
     logger.warning(
         f"🧹The output directory {output_dir} already exists. "
         "This is ok and expected if you had already started (and aborted) "
@@ -306,7 +307,7 @@ class EcalMonitoring:
         output_name = get_with_fallback("monitoring", "output_name", output_name)
         self.output_dir = os.path.abspath(os.path.join(output_parent, output_name))
         if os.path.exists(self.output_dir) and len(os.listdir(self.output_dir)) > 0:
-            cleanup_temporary(self.output_dir, self.logger)
+            cleanup_temporary(self.output_dir, self.logger, self.raw_run_folder)
         create_directory_structure(self.output_dir)
         configure_logging(self.logger, os.path.join(self.output_dir, my_paths.log_file))
         self.max_workers = int(get_with_fallback("monitoring", "max_workers", "10"))
