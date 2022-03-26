@@ -16,6 +16,97 @@ import tarfile
 import threading
 import time
 
+_UPROOT = True
+if _UPROOT:
+    import awkward as ak
+    import matplotlib.pyplot as plt
+    import numpy as np
+    import uproot
+
+    logging.getLogger("matplotlib").setLevel(level=logging.ERROR)
+
+
+    def get_quality_info(current_build_queue, logger, output_dir=".", finished=False):
+        w_conf = np.full(15, 2.8)  # TODO: This should be taken from monitoring.cfg.
+        w_conf[-8:] = 4.2
+
+        current_build = current_build_queue.get(timeout=2)
+        id_dat = uproot.open(current_build)["ecal/id_dat"].array()
+        cycles = uproot.open(current_build)["ecal/cycle"].array()
+        nhit_slab = uproot.open(current_build)["ecal/nhit_slab"].array()
+        hit_slab = uproot.open(current_build)["ecal/hit_slab"].array()
+        energy = uproot.open(current_build)["ecal/hit_energy"].array()
+        is_hit = uproot.open(current_build)["ecal/hit_isHit"].array()
+        current_build_queue.put(current_build)
+        current_build_queue.task_done()
+
+        parts = np.unique(id_dat)
+        if finished:
+            n_cycles = np.max(cycles) - np.min(cycles) + 1
+        else:
+            # We cannot just take the unique values: There can be empty cycles.
+            n_cycles = 0
+            for part_id in parts:
+                cycles_in_part = cycles[id_dat == part_id]
+                n_cycles += np.max(cycles_in_part) - np.min(cycles_in_part) + 1
+        title_text = f"{n_cycles} cycles monitored"
+        if not finished:
+            title_text += f" in {len(parts)} parts (ongoing)"
+        title_text += f"\n{os.path.basename(output_dir)}"
+
+        fig, axs = plt.subplots(ncols=2, nrows=2, figsize=(12, 12))
+        axs = axs.flatten()
+        fig.suptitle(title_text)
+        n, bins, _ = axs[0].hist(
+            nhit_slab,
+            bins=np.arange(ak.min(nhit_slab) - 0.5, ak.max(nhit_slab) + 1),
+            cumulative=-1,
+        )
+        for i, counts in enumerate(n):
+            axs[0].text(
+                bins[i] + 0.5,
+                1,
+                f"{int(counts):> 10}",
+                horizontalalignment="center",
+                verticalalignment="bottom",
+                rotation="vertical",
+            )
+        axs[0].set_xlabel("slab coincidence >=")
+        axs[0].set_ylabel("# events")
+
+        slabs = np.arange(ak.min(hit_slab), ak.max(hit_slab) + 1)
+        axs[1].bar(slabs, [ak.sum(ak.sum(hit_slab == i, axis=1)) for i in slabs])
+        axs[1].set_xlabel("slab in coincidence")
+        axs[1].set_ylabel("# events")
+
+        slab_energies = []
+        slab_energies_std = []
+        event_energy = np.zeros(len(energy))
+        for i, i_slab in enumerate(slabs):
+            e_in_slab = energy[(hit_slab == i_slab) & (is_hit > 0)]
+            e_in_slab = e_in_slab[e_in_slab > 0]
+            e_in_slab = e_in_slab / w_conf[i]
+            event_energy = event_energy + ak.sum(e_in_slab, axis=1)
+            e_flat = ak.flatten(ak.sum(e_in_slab, axis=1), axis=None)
+            slab_energies.append(np.mean(e_flat))
+            slab_energies_std.append(np.std(e_flat))
+
+        axs[2].bar(slabs, slab_energies, yerr=slab_energies_std)
+        axs[2].set_xlabel("slab in coincidence")
+        axs[2].set_ylabel("average energy")
+
+        axs[3].hist(event_energy, bins="auto")
+        axs[3].set_xlabel("# events")
+        axs[3].set_ylabel("event energy")
+
+        fig.tight_layout()
+        in_data_img_path = os.path.join(output_dir, "data_quality.png")
+        fig.savefig(in_data_img_path, dpi=300)
+        monitoring_root = os.path.dirname(os.path.abspath(__file__))
+        fig.savefig(os.path.join(monitoring_root, "data_quality.png"), dpi=300)
+        logger.info("🥨" + title_text.replace("\n", ". ") + ": " + in_data_img_path)
+        return axs
+
 tb_analysis_dir = os.path.join(
     os.path.dirname(os.path.abspath(__file__)),
     "continuous_event_building",
@@ -402,6 +493,7 @@ class EcalMonitoring:
         start_loop_time = time.time()
         self._largest_raw_dat = 0
         self._last_n_monitored = 0
+        self._new_merged = False
         self._snapshot_needs_current_build = False
         self._run_finished = False
         self._time_last_raw_check = 0
@@ -420,6 +512,17 @@ class EcalMonitoring:
                 job_args = [queues, i]
                 futures.append(executor.submit(self.find_and_do_job, *job_args))
                 time.sleep(1)  # Head start for the startup bookkeeping.
+            if _UPROOT:
+                while not all(e.done() for e in futures):
+                    if self._new_merged:
+                        self._new_merged = False
+                        get_quality_info(
+                            current_build_queue=queues["current_build"],
+                            logger=self.logger,
+                            output_dir=self.output_dir,
+                            finished=False,
+                        )
+                    time.sleep(1)
             self._debug_future_returns(futures, queues)
         wrap_up_time = time.time()
         self.times[-1].append(
@@ -855,6 +958,7 @@ class EcalMonitoring:
             queues["merge"].task_done()
         queues["current_build"].put(current_build)
         queues["current_build"].task_done()
+        self._new_merged = True
 
     def _single_merge_eventbuilding(self, tmp_path, current_build):
         build_name = os.path.basename(tmp_path)
@@ -965,6 +1069,12 @@ class EcalMonitoring:
                 snapshot_name = "stopped_run.root"
             else:
                 snapshot_name = "full_run.root"
+                get_quality_info(
+                    current_build_queue=current_build_queue,
+                    logger=self.logger,
+                    output_dir=self.output_dir,
+                    finished=True,
+                )
             build_file = current_build_queue.get()
             self.get_snapshot(
                 current_build_queue=None,
