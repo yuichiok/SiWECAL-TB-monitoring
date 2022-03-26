@@ -661,6 +661,9 @@ class EcalMonitoring:
         first_dat_pattern = os.path.join(self.raw_run_folder, "*" + pattern)
         first_dat_glob = list(glob.glob(first_dat_pattern))
         if len(first_dat_glob) == 0:
+            first_dat_from_tar = list(glob.glob(first_dat_pattern + ".tar.gz"))
+            first_dat_glob.extend(sorted(map(without_tar, first_dat_from_tar)))
+        if len(first_dat_glob) == 0:
             return False
         elif len(first_dat_glob) == 1:
             raw_file_path = first_dat_glob[0]
@@ -743,7 +746,7 @@ class EcalMonitoring:
             with tarfile.open(raw_file_path) as tar:
                 tar.extractall(path=tmp_dir)
             in_path = os.path.join(tmp_dir, raw_file_name)
-            assert os.path.exists(in_path)
+            assert os.path.exists(in_path), in_path
         else:
             in_path = raw_file_path
 
