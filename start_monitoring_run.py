@@ -633,6 +633,8 @@ class EcalMonitoring:
         self.times[i_worker] = []
         threading.current_thread().name = f"👷{i_worker:02}"
         job_queue = queues["job"]
+        if i_worker == 0:
+            self._check_for_missing_builds(job_queue)
         total_time_look_for_jobs = 0
         total_time_idle = 0
         while True:
@@ -679,6 +681,7 @@ class EcalMonitoring:
                 priority, neg_id_dat, in_file = job_queue.get(timeout=2)
             except queue.Empty:
                 self._current_jobs[i_worker] = Priority.IDLE
+                self._check_for_missing_builds(job_queue)
                 continue
             time_do_job = time.time()
             total_time_look_for_jobs += time_do_job - time_look_for_jobs
@@ -729,6 +732,28 @@ class EcalMonitoring:
                 )
             else:
                 total_time_idle += self._time_last_job - time_do_job
+
+    def _check_for_missing_builds(self, job_queue):
+        conv_dir = os.path.join(self.output_dir, my_paths.converted_dir)
+        for conv_part in os.listdir(conv_dir):
+            name = conv_part.replace("converted_", "build")
+            if os.path.exists(os.path.join(self.output_dir, my_paths.tmp_dir, name)):
+                continue
+            if os.path.exists(os.path.join(self.output_dir, my_paths.build_dir, name)):
+                continue
+            conv_path = os.path.join(conv_dir, conv_part)
+            if "_monitoring_split_" in conv_part:
+                normal_part, split_part = conv_part.split("_monitoring_split_")
+                split_id = int(split_part[: -len(".root")])
+                try:
+                    normal_id = int(normal_part[-4:]) + 1
+                except ValueError:
+                    normal_id = 1
+                id_job = 10000 * normal_id + split_id
+            else:
+                id_job = int(conv_part[: -len(".root")][-4:])
+            job_queue.put((Priority.EVENT_BUILDING, -id_job, conv_path))
+        return True
 
     def _look_for_new_raw(self, job_queue):
         if self._run_finished:
