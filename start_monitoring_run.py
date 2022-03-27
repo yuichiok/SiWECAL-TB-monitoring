@@ -25,12 +25,13 @@ if _UPROOT:
 
     logging.getLogger("matplotlib").setLevel(level=logging.ERROR)
 
-
     def get_quality_info(current_build_queue, logger, output_dir=".", finished=False):
         w_conf = np.full(15, 2.8)  # TODO: This should be taken from monitoring.cfg.
         w_conf[-8:] = 4.2
-
-        current_build = current_build_queue.get(timeout=2)
+        try:
+            current_build = current_build_queue.get(timeout=2)
+        except queue.Empty:
+            return False
         id_dat = uproot.open(current_build)["ecal/id_dat"].array()
         cycles = uproot.open(current_build)["ecal/cycle"].array()
         nhit_slab = uproot.open(current_build)["ecal/nhit_slab"].array()
@@ -105,7 +106,9 @@ if _UPROOT:
         monitoring_root = os.path.dirname(os.path.abspath(__file__))
         fig.savefig(os.path.join(monitoring_root, "data_quality.png"), dpi=300)
         logger.info("🥨" + title_text.replace("\n", ". ") + ": " + in_data_img_path)
-        return axs
+        plt.close(fig)
+        return True
+
 
 tb_analysis_dir = os.path.join(
     os.path.dirname(os.path.abspath(__file__)),
@@ -516,12 +519,14 @@ class EcalMonitoring:
                 while not all(e.done() for e in futures):
                     if self._new_merged:
                         self._new_merged = False
-                        get_quality_info(
+                        no_timeout = get_quality_info(
                             current_build_queue=queues["current_build"],
                             logger=self.logger,
                             output_dir=self.output_dir,
                             finished=False,
                         )
+                        if not no_timeout:
+                            self._new_merged = True
                     time.sleep(1)
             self._debug_future_returns(futures, queues)
         wrap_up_time = time.time()
