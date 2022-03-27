@@ -30,7 +30,7 @@ def main(raw_parent, output_parent):
             time_since_last_change = int(time.time() - os.path.getmtime(output_log))
             if time_since_last_change < 180:
                 print(
-                    f"Unfinished run detected: {output_dir} . "
+                    f"❓Unfinished run detected: {output_dir} . "
                     f"But the last logging was only {time_since_last_change}s ago. "
                     "Maybe someone else is already working on it? "
                     "Skipping it, to be save."

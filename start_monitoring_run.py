@@ -25,9 +25,37 @@ if _UPROOT:
 
     logging.getLogger("matplotlib").setLevel(level=logging.ERROR)
 
-    def get_quality_info(current_build_queue, logger, output_dir=".", finished=False):
-        w_conf = np.full(15, 2.8)  # TODO: This should be taken from monitoring.cfg.
-        w_conf[-8:] = 4.2
+    def get_quality_info(current_build_queue, monitoring, finished=False):
+        w_setting = monitoring.eventbuilding_args["w_config"]
+        if w_setting == 3:
+            w_conf = np.full(15, 2.8)  # TODO: This should be taken from monitoring.cfg.
+            w_conf[-8:] = 4.2
+            s_conf = np.array(
+                [
+                    0.650,
+                    0.650,
+                    0.500,
+                    0.500,
+                    0.325,
+                    0.325,
+                    0.325,
+                    0.500,
+                    0.500,
+                    0.500,
+                    0.500,
+                    0.325,
+                    0.325,
+                    0.325,
+                    0.325,
+                ]
+            )
+            dEdx_s = 2 * 2.33 / 1000
+            dEdx_w = 2 * 19.25 / 1000
+            f_layer = (s_conf * dEdx_s) / (w_conf * dEdx_w + s_conf * dEdx_s)
+            f_layer = 1 / (w_conf * dEdx_w + s_conf * dEdx_s)
+        else:
+            f_layer = np.ones(15)
+
         try:
             current_build = current_build_queue.get(timeout=2)
         except queue.Empty:
@@ -53,7 +81,7 @@ if _UPROOT:
         title_text = f"{n_cycles} cycles monitored"
         if not finished:
             title_text += f" in {len(parts)} parts (ongoing)"
-        title_text += f"\n{os.path.basename(output_dir)}"
+        title_text += f"\n{os.path.basename(monitoring.output_dir)}"
 
         fig, axs = plt.subplots(ncols=2, nrows=2, figsize=(12, 12))
         axs = axs.flatten()
@@ -86,7 +114,7 @@ if _UPROOT:
         for i, i_slab in enumerate(slabs):
             e_in_slab = energy[(hit_slab == i_slab) & (is_hit > 0)]
             e_in_slab = e_in_slab[e_in_slab > 0]
-            e_in_slab = e_in_slab / w_conf[i]
+            e_in_slab = e_in_slab / f_layer[i]
             event_energy = event_energy + ak.sum(e_in_slab, axis=1)
             e_flat = ak.flatten(ak.sum(e_in_slab, axis=1), axis=None)
             slab_energies.append(np.mean(e_flat))
@@ -97,15 +125,17 @@ if _UPROOT:
         axs[2].set_ylabel("average energy")
 
         axs[3].hist(event_energy, bins="auto")
-        axs[3].set_xlabel("# events")
-        axs[3].set_ylabel("event energy")
+        axs[3].set_xlabel("event energy")
+        axs[3].set_ylabel("# events")
 
         fig.tight_layout()
-        in_data_img_path = os.path.join(output_dir, "data_quality.png")
+        in_data_img_path = os.path.join(monitoring.output_dir, "data_quality.png")
         fig.savefig(in_data_img_path, dpi=300)
         monitoring_root = os.path.dirname(os.path.abspath(__file__))
         fig.savefig(os.path.join(monitoring_root, "data_quality.png"), dpi=300)
-        logger.info("🥨" + title_text.replace("\n", ". ") + ": " + in_data_img_path)
+        monitoring.logger.info(
+            "🥨" + title_text.replace("\n", ". ") + ": " + in_data_img_path
+        )
         plt.close(fig)
         return True
 
@@ -521,8 +551,7 @@ class EcalMonitoring:
                         self._new_merged = False
                         no_timeout = get_quality_info(
                             current_build_queue=queues["current_build"],
-                            logger=self.logger,
-                            output_dir=self.output_dir,
+                            monitoring=self,
                             finished=False,
                         )
                         if not no_timeout:
@@ -1076,8 +1105,7 @@ class EcalMonitoring:
                 snapshot_name = "full_run.root"
                 get_quality_info(
                     current_build_queue=current_build_queue,
-                    logger=self.logger,
-                    output_dir=self.output_dir,
+                    monitoring=self,
                     finished=True,
                 )
             build_file = current_build_queue.get()
