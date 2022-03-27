@@ -649,6 +649,13 @@ class EcalMonitoring:
             all_done = self._run_finished and job_queue.empty()
             file_stop_gracefully = os.path.join(self.output_dir, "stop_monitoring")
             if all_done or os.path.exists(file_stop_gracefully):
+                if self._binary_split_M > 0 and all_done:
+                    any_worker_might_split_large_binary = any(
+                        [v == Priority.CONVERSION for v in self._current_jobs]
+                    )
+                    if any_worker_might_split_large_binary:
+                        time.sleep(1)
+                        continue
                 if not all_done:
                     if not hasattr(self, "_stopped_gracefully"):
                         self._stopped_gracefully = True
@@ -676,12 +683,12 @@ class EcalMonitoring:
                         data_path=self.output_dir,
                     )
                 )
+                print(f"I quit 👷{i_worker:02}")
                 return
             try:
                 priority, neg_id_dat, in_file = job_queue.get(timeout=2)
             except queue.Empty:
                 self._current_jobs[i_worker] = Priority.IDLE
-                self._check_for_missing_builds(job_queue)
                 continue
             time_do_job = time.time()
             total_time_look_for_jobs += time_do_job - time_look_for_jobs
@@ -953,6 +960,9 @@ class EcalMonitoring:
             tmp_dir = os.path.join(self.output_dir, my_paths.tmp_dir)
             part_prefix_name = os.path.basename(binary_path) + "_monitoring_split_"
             part_prefix = os.path.join(tmp_dir, part_prefix_name)
+            if len(glob.glob(part_prefix + "*")) > 0:
+                # Here the splitting was already done.
+                return True
             cmd = f"split {binary_path} {part_prefix} "
             cmd += f"-b {self._binary_split_M}M "
             cmd += "--suffix-length 5 --numeric "
