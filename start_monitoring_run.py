@@ -138,6 +138,9 @@ if _UPROOT:
         )
         plt.close(fig)
         return True
+else:
+    def get_quality_info(current_build_queue, monitoring, finished=False):
+        return True
 
 
 tb_analysis_dir = os.path.join(
@@ -683,7 +686,6 @@ class EcalMonitoring:
                         data_path=self.output_dir,
                     )
                 )
-                print(f"I quit 👷{i_worker:02}")
                 return
             try:
                 priority, neg_id_dat, in_file = job_queue.get(timeout=2)
