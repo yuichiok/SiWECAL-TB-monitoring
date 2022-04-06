@@ -382,21 +382,24 @@ class EcalMonitoring:
             return file
 
         self.eventbuilding_args = dict()
-        for calib in [
+        self.eventbuilding_args["config_file"] = config_file
+        calibration_fields = [
             "pedestals_file",
             "mip_calibration_file",
             "pedestals_lg_file",
             "mip_calibration_lg_file",
-        ]:
+        ]
+        for optional_calib in ["mapping_file", "mapping_file_cob"]:
+            if optional_calib in ev_building:
+                calibration_fields.append(optional_calib)
+        for calib in calibration_fields:
             self.eventbuilding_args[calib] = ensure_calibration_exists(calib)
-        self.eventbuilding_args["w_config"] = ev_building.getint("w_config")
-        self.eventbuilding_args["min_slabs_hit"] = ev_building.getint("min_slabs_hit")
-        if ev_building.getboolean("no_zero_suppress"):
-            self.eventbuilding_args["no_zero_suppress"] = ""
-        self.eventbuilding_args["asu_version"] = ev_building["asu_version"]
         if "id_run" not in ev_building:
             ev_building["id_run"] = str(guess_id_run(output_name, output_parent))
         self.eventbuilding_args["id_run"] = ev_building.getint("id_run")
+
+        # For quality_info
+        self._w_config = ev_building.get("w_config", "0")
 
         _s_after = config["snapshot"].get("after", "")
         try:
@@ -930,11 +933,12 @@ class EcalMonitoring:
         in_path = os.path.join(self.output_dir, my_paths.converted_dir, converted_name)
 
         builder_dir = os.path.join(my_paths.tb_analysis_dir, "eventbuilding")
-        args = f" {in_path} --out_file_name {tmp_path}"
+        args = f" --converted_path {in_path} --build_path {tmp_path}"
         self.eventbuilding_args["id_dat"] = int(id_dat)
+        # With `capture_output=True`, printing the progress info makes no sense.
+        self.eventbuilding_args["no_progress_info"] = "True"
         for k, v in self.eventbuilding_args.items():
             args += f" --{k} {v}"
-        args += " --no_progress_info"
         ret = subprocess.run(
             "./build_events.py" + args,
             shell=True,

@@ -17,36 +17,6 @@ try:
     matplotlib.use("agg")
 
     def get_quality_info(current_build_queue, monitoring, finished=False):
-        w_setting = monitoring.eventbuilding_args["w_config"]
-        if w_setting == 3:
-            w_conf = np.full(15, 2.8)  # TODO: This should be taken from monitoring.cfg.
-            w_conf[-8:] = 4.2
-            s_conf = np.array(
-                [
-                    0.650,
-                    0.650,
-                    0.500,
-                    0.500,
-                    0.325,
-                    0.325,
-                    0.325,
-                    0.500,
-                    0.500,
-                    0.500,
-                    0.500,
-                    0.325,
-                    0.325,
-                    0.325,
-                    0.325,
-                ]
-            )
-            dEdx_s = 2 * 2.33 / 1000
-            dEdx_w = 2 * 19.25 / 1000
-            f_layer = (s_conf * dEdx_s) / (w_conf * dEdx_w + s_conf * dEdx_s)
-            f_layer = 1 / (w_conf * dEdx_w + s_conf * dEdx_s)
-        else:
-            f_layer = np.ones(15)
-
         try:
             current_build = current_build_queue.get(timeout=2)
         except queue.Empty:
@@ -59,6 +29,15 @@ try:
         is_hit = uproot.open(current_build)["ecal/hit_isHit"].array()
         current_build_queue.put(current_build)
         current_build_queue.task_done()
+
+        slabs = np.arange(ak.min(hit_slab), ak.max(hit_slab) + 1)
+        dEdx_w = 2 * 19.25 / 1000
+        if "," in monitoring._w_config:
+            w_conf = np.array(list(map(float, monitoring._w_config.split(","))))
+        else:
+            w_conf = np.full_like(slabs, float(monitoring._w_config))
+        f_layer = w_conf * dEdx_w
+        f_layer[f_layer == 0] = 1
 
         parts = np.unique(ak.to_numpy(id_dat))
         if finished:
@@ -94,7 +73,6 @@ try:
         axs[0].set_xlabel("slab coincidence >=")
         axs[0].set_ylabel("# events")
 
-        slabs = np.arange(ak.min(hit_slab), ak.max(hit_slab) + 1)
         axs[1].bar(slabs, [ak.sum(ak.sum(hit_slab == i, axis=1)) for i in slabs])
         axs[1].set_xlabel("slab in coincidence")
         axs[1].set_ylabel("# events")
@@ -105,7 +83,7 @@ try:
         for i, i_slab in enumerate(slabs):
             e_in_slab = energy[(hit_slab == i_slab) & (is_hit > 0)]
             e_in_slab = e_in_slab[e_in_slab > 0]
-            e_in_slab = e_in_slab / f_layer[i]
+            e_in_slab = e_in_slab * f_layer[i]
             event_energy = event_energy + ak.sum(e_in_slab, axis=1)
             e_flat = ak.flatten(ak.sum(e_in_slab, axis=1), axis=None)
             slab_energies.append(np.mean(e_flat))
