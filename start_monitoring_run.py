@@ -322,7 +322,7 @@ class EcalMonitoring:
             assert env_py_v.startswith("Python ") and env_py_v.endswith("\n"), env_py_v
             env_py_v = env_py_v[:-1]
             py_v_list = list(map(int, env_py_v[len("Python ") :].split(".")))
-        except FileExistsError as e:
+        except (FileExistsError, TypeError) as e:
             self.logger.error(f"env_py_v={env_py_v}")
             self.logger.exception(e)
             py_v_list = [2, 0, 0]
