@@ -9,7 +9,7 @@ jobs:
     strategy:
       matrix:
         run-name: ["dummy_run_123456"]
-        SETUP: ["/cvmfs/sft.cern.ch/lcg/views/LCG_99/x86_64-ubuntu2004-gcc9-opt/setup.sh"]
+        SETUP: ["/cvmfs/sft.cern.ch/lcg/views/LCG_101/x86_64-ubuntu2004-gcc9-opt/setup.sh"]
     runs-on: ubuntu-latest
     timeout-minutes: 30
 

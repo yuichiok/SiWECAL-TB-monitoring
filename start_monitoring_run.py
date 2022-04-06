@@ -6,6 +6,7 @@ import configparser
 import datetime
 import enum
 import glob
+import importlib.util
 import logging
 import os
 import queue
@@ -16,141 +17,30 @@ import tarfile
 import threading
 import time
 
-_UPROOT = True
-if _UPROOT:
-    import awkward as ak
-    import matplotlib.pyplot as plt
-    import numpy as np
-    import uproot
-
-    logging.getLogger("matplotlib").setLevel(level=logging.ERROR)
-
-    def get_quality_info(current_build_queue, monitoring, finished=False):
-        w_setting = monitoring.eventbuilding_args["w_config"]
-        if w_setting == 3:
-            w_conf = np.full(15, 2.8)  # TODO: This should be taken from monitoring.cfg.
-            w_conf[-8:] = 4.2
-            s_conf = np.array(
-                [
-                    0.650,
-                    0.650,
-                    0.500,
-                    0.500,
-                    0.325,
-                    0.325,
-                    0.325,
-                    0.500,
-                    0.500,
-                    0.500,
-                    0.500,
-                    0.325,
-                    0.325,
-                    0.325,
-                    0.325,
-                ]
-            )
-            dEdx_s = 2 * 2.33 / 1000
-            dEdx_w = 2 * 19.25 / 1000
-            f_layer = (s_conf * dEdx_s) / (w_conf * dEdx_w + s_conf * dEdx_s)
-            f_layer = 1 / (w_conf * dEdx_w + s_conf * dEdx_s)
-        else:
-            f_layer = np.ones(15)
-
-        try:
-            current_build = current_build_queue.get(timeout=2)
-        except queue.Empty:
-            return False
-        id_dat = uproot.open(current_build)["ecal/id_dat"].array()
-        cycles = uproot.open(current_build)["ecal/cycle"].array()
-        nhit_slab = uproot.open(current_build)["ecal/nhit_slab"].array()
-        hit_slab = uproot.open(current_build)["ecal/hit_slab"].array()
-        energy = uproot.open(current_build)["ecal/hit_energy"].array()
-        is_hit = uproot.open(current_build)["ecal/hit_isHit"].array()
-        current_build_queue.put(current_build)
-        current_build_queue.task_done()
-
-        parts = np.unique(id_dat)
-        if finished:
-            n_cycles = np.max(cycles) - np.min(cycles) + 1
-        else:
-            # We cannot just take the unique values: There can be empty cycles.
-            n_cycles = 0
-            for part_id in parts:
-                cycles_in_part = cycles[id_dat == part_id]
-                n_cycles += np.max(cycles_in_part) - np.min(cycles_in_part) + 1
-        title_text = f"{n_cycles} cycles monitored"
-        if not finished:
-            title_text += f" in {len(parts)} parts (ongoing)"
-        title_text += f"\n{os.path.basename(monitoring.output_dir)}"
-
-        fig, axs = plt.subplots(ncols=2, nrows=2, figsize=(12, 12))
-        axs = axs.flatten()
-        fig.suptitle(title_text)
-        n, bins, _ = axs[0].hist(
-            nhit_slab,
-            bins=np.arange(ak.min(nhit_slab) - 0.5, ak.max(nhit_slab) + 1),
-            cumulative=-1,
-        )
-        for i, counts in enumerate(n):
-            axs[0].text(
-                bins[i] + 0.5,
-                1,
-                f"{int(counts):> 10}",
-                horizontalalignment="center",
-                verticalalignment="bottom",
-                rotation="vertical",
-            )
-        axs[0].set_xlabel("slab coincidence >=")
-        axs[0].set_ylabel("# events")
-
-        slabs = np.arange(ak.min(hit_slab), ak.max(hit_slab) + 1)
-        axs[1].bar(slabs, [ak.sum(ak.sum(hit_slab == i, axis=1)) for i in slabs])
-        axs[1].set_xlabel("slab in coincidence")
-        axs[1].set_ylabel("# events")
-
-        slab_energies = []
-        slab_energies_std = []
-        event_energy = np.zeros(len(energy))
-        for i, i_slab in enumerate(slabs):
-            e_in_slab = energy[(hit_slab == i_slab) & (is_hit > 0)]
-            e_in_slab = e_in_slab[e_in_slab > 0]
-            e_in_slab = e_in_slab / f_layer[i]
-            event_energy = event_energy + ak.sum(e_in_slab, axis=1)
-            e_flat = ak.flatten(ak.sum(e_in_slab, axis=1), axis=None)
-            slab_energies.append(np.mean(e_flat))
-            slab_energies_std.append(np.std(e_flat))
-
-        axs[2].bar(slabs, slab_energies, yerr=slab_energies_std)
-        axs[2].set_xlabel("slab in coincidence")
-        axs[2].set_ylabel("average energy")
-
-        axs[3].hist(event_energy, bins="auto")
-        axs[3].set_xlabel("event energy")
-        axs[3].set_ylabel("# events")
-
-        fig.tight_layout()
-        in_data_img_path = os.path.join(monitoring.output_dir, "data_quality.png")
-        fig.savefig(in_data_img_path, dpi=300)
-        monitoring_root = os.path.dirname(os.path.abspath(__file__))
-        fig.savefig(os.path.join(monitoring_root, "data_quality.png"), dpi=300)
-        monitoring.logger.info(
-            "🥨" + title_text.replace("\n", ". ") + ": " + in_data_img_path
-        )
-        plt.close(fig)
-        return True
-
-else:
-
-    def get_quality_info(current_build_queue, monitoring, finished=False):
-        return True
-
-
+repo_root = os.path.dirname(os.path.abspath(__file__))
 tb_analysis_dir = os.path.join(
-    os.path.dirname(os.path.abspath(__file__)),
+    repo_root,
     "continuous_event_building",
     "SiWECAL-TB-analysis",
 )
 assert os.path.isdir(tb_analysis_dir), tb_analysis_dir
+
+
+def import_from(file_path):
+    assert os.path.isfile(file_path), file_path
+    module_name = os.path.basename(file_path)
+    assert module_name.endswith(".py"), module_name
+    module_name = module_name[:-3]
+    spec = importlib.util.spec_from_file_location(module_name, file_path)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+quality_info = import_from(
+    os.path.join(repo_root, "continuous_event_building", "quality_info.py")
+)
 
 file_paths = dict(
     run_settings="Run_Settings.txt",
@@ -168,9 +58,6 @@ monitoring_subfolders = dict(
 )
 file_paths.update(**monitoring_subfolders)
 my_paths = collections.namedtuple("Paths", file_paths.keys())(**file_paths)
-get_root_str = (
-    "source /cvmfs/sft.cern.ch/lcg/views/LCG_99/x86_64-centos7-gcc10-opt/setup.sh"
-)
 
 
 def as_tar(path):
@@ -417,14 +304,13 @@ class EcalMonitoring:
         return raw_run_folder
 
     def _validate_computing_environment(self):
-        try:
-            subprocess.run(["root", "--version"], capture_output=True)
-        except FileNotFoundError:
-            self.logger.error(
-                "⛔Aborted. CERN root not available. "
-                "💡Hint: try the environment at\n" + get_root_str
-            )
-            sys.exit(1)
+        a_platform = "x86_64-centos7-gcc11-opt"
+        recommended_cvmfs_hint = (
+            "💡Hint: If you do not have the environment set up locally "
+            "but do have access to cvmfs, "
+            f"try an LCG view (adapt `{a_platform}` for your OS) "
+            f"\nsource /cvmfs/sft.cern.ch/lcg/views/LCG_101/{a_platform}/setup.sh"
+        )
         env_py_v = ""
         try:
             # This is not necessarily the python that runs this script, but
@@ -432,20 +318,32 @@ class EcalMonitoring:
             ret = subprocess.run(["python", "--version"], capture_output=True)
             # Python2 writes version info to sys.stderr, Python3 to sys.stderr.
             env_py_v = ret.stdout + ret.stderr
-            assert env_py_v.startswith(b"Python ") and env_py_v.endswith(
-                b"\n"
-            ), env_py_v
-            py_v_list = list(map(int, env_py_v[len("Python ") : -1].split(b".")))
-        except Exception as e:
+            env_py_v = env_py_v.decode()
+            assert env_py_v.startswith("Python ") and env_py_v.endswith("\n"), env_py_v
+            env_py_v = env_py_v[:-1]
+            py_v_list = list(map(int, env_py_v[len("Python ") :].split(".")))
+        except FileExistsError as e:
             self.logger.error(f"env_py_v={env_py_v}")
             self.logger.exception(e)
             py_v_list = [2, 0, 0]
         if py_v_list[0] != 3:
-            self.logger.warning(
+            self.logger.error(
                 "🐌Using pyROOT with python2 for eventbuilding is not technically "
                 f"forbidden, but discouraged for performance reasons: {env_py_v}. "
-                "💡Hint: try the environment at\n" + get_root_str
             )
+        if py_v_list[0] != 3 or py_v_list[1] < 9:
+            self.logger.error(
+                f"⛔Aborted. The monitoring needs at least Python 3.8 ({env_py_v}). "
+                " " + recommended_cvmfs_hint
+            )
+            sys.exit(1)
+        try:
+            subprocess.run(["root", "--version"], capture_output=True)
+        except FileNotFoundError:
+            self.logger.error(
+                "⛔Aborted. CERN root not available. " + recommended_cvmfs_hint
+            )
+            sys.exit(1)
 
     def _read_config(self, config_file):
         if not os.path.isabs(config_file):
@@ -473,6 +371,7 @@ class EcalMonitoring:
         assert self.max_workers >= 1, self.max_workers
         self._skip_dirty_dat = config["monitoring"].getboolean("skip_dirty_dat", False)
         self._binary_split_M = config["monitoring"].getint("binary_split_M", -1)
+        self._quality_info = config["monitoring"].getboolean("quality_info", True)
 
         ev_building = config["eventbuilding"]
 
@@ -580,11 +479,11 @@ class EcalMonitoring:
                 job_args = [queues, i]
                 futures.append(executor.submit(self.find_and_do_job, *job_args))
                 time.sleep(1)  # Head start for the startup bookkeeping.
-            if _UPROOT:
+            if self._quality_info:
                 while not all(e.done() for e in futures):
                     if self._new_merged:
                         self._new_merged = False
-                        no_timeout = get_quality_info(
+                        no_timeout = quality_info.get_quality_info(
                             current_build_queue=queues["current_build"],
                             monitoring=self,
                             finished=False,
@@ -1172,7 +1071,7 @@ class EcalMonitoring:
                 snapshot_name = "stopped_run.root"
             else:
                 snapshot_name = "full_run.root"
-                get_quality_info(
+                quality_info.get_quality_info(
                     current_build_queue=current_build_queue,
                     monitoring=self,
                     finished=True,
