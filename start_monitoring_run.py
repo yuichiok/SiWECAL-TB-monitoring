@@ -138,7 +138,9 @@ if _UPROOT:
         )
         plt.close(fig)
         return True
+
 else:
+
     def get_quality_info(current_build_queue, monitoring, finished=False):
         return True
 
@@ -279,6 +281,35 @@ def cleanup_temporary(output_dir, logger, input_dir):
             os.remove(os.path.join(tmp_dir, tmp_file))
 
 
+def git_repo_status():
+    repo_status = []
+    kw = dict(capture_output=True, cwd=os.path.dirname(os.path.abspath(__file__)))
+    ret = subprocess.run(["git", "log", "-n1", "--format='%H'"], **kw)
+    commit_hash = ret.stdout.decode().strip("'").rstrip("'\n")
+    web_org = "https://github.com/SiWECAL-TestBeam"
+    web_id = f"{web_org}/SiWECAL-TB-monitoring/tree/{commit_hash}"
+    if ret.returncode == 128:
+        repo_status += ["🌂Git repository could not be identified."]
+        repo_status += [f"Check the web version: {web_id.split('tree')[0]}"]
+        return " ".join(repo_status)
+    else:
+        repo_status += [f"⛅Working with monitoring version: {web_id}"]
+
+    ret = subprocess.run(["git", "log", "@{u}..", "--oneline"], **kw)
+    has_local_commits = ret.stdout + ret.stderr != b""
+    if has_local_commits:
+        repo_status += ["(at least one local-only commit)"]
+
+    cmd = ["git", "diff-index", "--name-only", "HEAD"]
+    ret = subprocess.run(cmd, capture_output=True)
+    assert ret.stderr == b""
+    changed_files = [f.decode() for f in filter(None, ret.stdout.split(b"\n"))]
+    if len(changed_files) > 0:
+        repo_status += ["(some files were changed but not yet committed:"]
+        repo_status += [", ".join(changed_files) + ")"]
+    return " ".join(repo_status)
+
+
 def configure_logging(logger, log_file=None):
     """TODO: Nicer formatting. Maybe different for console and file."""
     logger.setLevel(logging.DEBUG)
@@ -298,6 +329,7 @@ def configure_logging(logger, log_file=None):
 
     time_now = get_now_string()
     logger.info(f"🛫Logging to file {log_file} started at {time_now}.")
+    logger.info(git_repo_status())
 
 
 def log_unexpected_error_subprocess(logger, subprocess_return, add_context=""):
