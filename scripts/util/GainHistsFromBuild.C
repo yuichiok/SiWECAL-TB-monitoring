@@ -29,7 +29,7 @@ int GainHistsFromBuild(TString build_path = "current_build.root",
   int max_nhit_len = ecal->GetMaximum("nhit_len");
   int hit_slab[max_nhit_len], hit_chip[max_nhit_len], hit_chan[max_nhit_len];
   int hit_sca[max_nhit_len], hit_isHit[max_nhit_len];
-  int hit_hg[max_nhit_len], hit_lg[max_nhit_len];
+  int hit_adc_high[max_nhit_len], hit_adc_low[max_nhit_len];
   int nhit_len;
   int nhit_slab;
   ecal->SetBranchStatus("*", 0); // disable all branches
@@ -43,10 +43,10 @@ int GainHistsFromBuild(TString build_path = "current_build.root",
   ecal->SetBranchAddress("hit_sca", &hit_sca);
   ecal->SetBranchStatus("hit_isHit", 1);
   ecal->SetBranchAddress("hit_isHit", &hit_isHit);
-  ecal->SetBranchStatus("hit_hg", 1);
-  ecal->SetBranchAddress("hit_hg", &hit_hg);
-  ecal->SetBranchStatus("hit_lg", 1);
-  ecal->SetBranchAddress("hit_lg", &hit_lg);
+  ecal->SetBranchStatus("hit_adc_high", 1);
+  ecal->SetBranchAddress("hit_adc_high", &hit_adc_high);
+  ecal->SetBranchStatus("hit_adc_low", 1);
+  ecal->SetBranchAddress("hit_adc_low", &hit_adc_low);
   ecal->SetBranchStatus("nhit_len", 1);
   ecal->SetBranchAddress("nhit_len", &nhit_len);
   ecal->SetBranchStatus("nhit_slab", 1);
@@ -175,24 +175,24 @@ int GainHistsFromBuild(TString build_path = "current_build.root",
             .at(hit_chip[i])
             .at(hit_chan[i])
             .at(hit_sca[i])
-            ->Fill(hit_lg[i]);
+            ->Fill(hit_adc_low[i]);
         mip_hg_sca.at(hit_slab_i)
             .at(hit_chip[i])
             .at(hit_chan[i])
             .at(hit_sca[i])
-            ->Fill(hit_hg[i]);
+            ->Fill(hit_adc_high[i]);
         i_hits_filled++;
       } else {
         ped_lg_sca.at(hit_slab_i)
             .at(hit_chip[i])
             .at(hit_chan[i])
             .at(hit_sca[i])
-            ->Fill(hit_lg[i]);
+            ->Fill(hit_adc_low[i]);
         ped_hg_sca.at(hit_slab_i)
             .at(hit_chip[i])
             .at(hit_chan[i])
             .at(hit_sca[i])
-            ->Fill(hit_hg[i]);
+            ->Fill(hit_adc_high[i]);
       }
     }
   }

@@ -88,7 +88,7 @@ class EventDisplay:
                 hovertemplate=txt,
                 customdata=np.stack(
                     (
-                        np.full((2, 2), energy),
+                        np.full((2, 2), float(energy)),
                         np.full((2, 2), z / self._layer_distance),
                     ),
                     axis=-1,
@@ -190,7 +190,7 @@ def get_parser_args():
         "-v",
         "--hover_var",
         type=str,
-        default="hit_hg(0,1000)",
+        default="hit_adc_high(0,1000)",
         help=(
             "Variable used for coloring the cells. "
             "If followed by a tuple with two numbers, these are interpreted "
