@@ -5,6 +5,7 @@
 ![GitHub repo size](https://img.shields.io/github/repo-size/SiWECAL-TestBeam/SiWECAL-TB-monitoring)
 
 Event-based almost-online monitoring for the SiW ECAL.
+To get started, check out the [tutorial](./Tutorial-TB2022-03.md).
 
 ## Submodules
 
