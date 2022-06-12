@@ -331,7 +331,7 @@ class EcalMonitoring:
                 "🐌Using pyROOT with python2 for eventbuilding is not technically "
                 f"forbidden, but discouraged for performance reasons: {env_py_v}. "
             )
-        if py_v_list[0] != 3 or py_v_list[1] < 9:
+        if py_v_list[0] != 3 or py_v_list[1] < 8:
             self.logger.error(
                 f"⛔Aborted. The monitoring needs at least Python 3.8 ({env_py_v}). "
                 " " + recommended_cvmfs_hint
