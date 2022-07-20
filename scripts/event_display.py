@@ -127,7 +127,9 @@ class EventDisplay:
             return False
         ev = self.ecal[i_event]
         x = getattr(ev, self._hover_var)
-        m = ev.hit_isHit == 1
+        # m = ev.hit_isHit == 1
+        m = ev.hit_adc_high > 350
+        # m = ev.hit_sca == 0
         title = (
             f"Event display {args.file_tag}_{i_event} "
             f"#Hits={len(x)} "
